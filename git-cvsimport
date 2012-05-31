@@ -756,7 +756,7 @@ open(CVS, "<$cvspsfile") or die $!;
 #Author: wkoch
 #Branch: STABLE-BRANCH-1-0
 #Ancestor branch: HEAD
-#Tag: (none)
+#Tags: TAG1 , TAG2
 #Log:
 #    See ChangeLog: Sat Sep 18 13:03:28 CEST 1999  Werner Koch
 #Members:
@@ -795,7 +795,7 @@ sub write_tree () {
 	return $tree;
 }
 
-my ($patchset,$date,$author_name,$author_email,$branch,$ancestor,$tag,$logmsg);
+my ($patchset,$date,$author_name,$author_email,$branch,$ancestor,@tags,$logmsg);
 my (@old,@new,@skipped,%ignorebranch,@commit_revisions);
 
 # commits that cvsps cannot place anywhere...
@@ -884,8 +884,7 @@ sub commit {
 	}
 	@commit_revisions = ();
 
-	if ($tag) {
-	        my ($xtag) = $tag;
+	for my $xtag (@tags) {
 		$xtag =~ s/\s+\*\*.*$//; # Remove stuff like ** INVALID ** and ** FUNKY **
 		$xtag =~ tr/_/\./ if ( $opt_u );
 		$xtag =~ s/[\/]/$opt_s/g;
@@ -943,13 +942,9 @@ while (<CVS>) {
 		$ancestor = undef;
 		$state = 6;
 		redo;
-	} elsif ($state == 6 and s/^Tag:\s+//) {
+	} elsif ($state == 6 and s/^Tags:\s*//) {
 		s/\s+$//;
-		if ($_ eq "(none)") {
-			$tag = undef;
-		} else {
-			$tag = $_;
-		}
+		@tags = split /\s*,\s+/, $_;
 		$state = 7;
 	} elsif ($state == 7 and /^Log:/) {
 		$logmsg = "";
