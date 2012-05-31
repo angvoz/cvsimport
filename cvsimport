@@ -17,4 +17,4 @@ else
 	echo "Importing $module..."
 	initial=1
 fi
-git-cvsimport -v -C $module -r cvs ${initial:+-p -x} -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R -T "$@" $module >> $module.log
+git-cvsimport -v -C $module -r cvs -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R -T "$@" $module >> $module.log
