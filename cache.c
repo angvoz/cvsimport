@@ -85,8 +85,7 @@ enum
     CACHE_NEED_PS,
     CACHE_NEED_PS_DATE,
     CACHE_NEED_PS_AUTHOR,
-    CACHE_NEED_PS_TAG,
-    CACHE_NEED_PS_TAG_FLAGS,
+    CACHE_NEED_PS_TAGS,
     CACHE_NEED_PS_BRANCH,
     CACHE_NEED_PS_BRANCH_ADD,
     CACHE_NEED_PS_DESCR,
@@ -104,8 +103,6 @@ time_t read_cache()
     PatchSet * ps = NULL;
     char datebuff[20] = "";
     char authbuff[AUTH_STR_MAX] = "";
-    char tagbuff[LOG_STR_MAX] = "";
-    int tag_flags = 0;
     char branchbuff[LOG_STR_MAX] = "";
     int branch_add = 0;
     int logbufflen = LOG_STR_MAX + 1;
@@ -250,26 +247,12 @@ time_t read_cache()
 		/* remove prefix "author: " and LF from len */
 		len -= 8;
 		strzncpy(authbuff, buff + 8, MIN(len, AUTH_STR_MAX));
-		state = CACHE_NEED_PS_TAG;
+		state = CACHE_NEED_PS_TAGS;
 	    }
 	    break;
-	case CACHE_NEED_PS_TAG:
-	    if (strncmp(buff, "tag:", 4) == 0)
-	    {
-		/* remove prefix "tag: " and LF from len */
-		len -= 5;
-		strzncpy(tagbuff, buff + 5, MIN(len, LOG_STR_MAX));
-		state = CACHE_NEED_PS_TAG_FLAGS;
-	    }
-	    break;
-	case CACHE_NEED_PS_TAG_FLAGS:
-	    if (strncmp(buff, "tag_flags:", 10) == 0)
-	    {
-		/* remove prefix "tag_flags: " and LF from len */
-		len -= 11;
-		tag_flags = atoi(buff + 11);
+	case CACHE_NEED_PS_TAGS:
+	    if (strncmp(buff, "tags:", 5) == 0)
 		state = CACHE_NEED_PS_BRANCH;
-	    }
 	    break;
 	case CACHE_NEED_PS_BRANCH:
 	    if (strncmp(buff, "branch:", 7) == 0)
@@ -332,8 +315,6 @@ time_t read_cache()
 	    {
 		datebuff[0] = 0;
 		authbuff[0] = 0;
-		tagbuff[0] = 0;
-		tag_flags = 0;
 		branchbuff[0] = 0;
 		branch_add = 0;
 		logbuff[0] = 0;
