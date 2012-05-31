@@ -1,0 +1,20 @@
+#!/bin/sh
+module=$1 ; shift
+dir=`dirname $0`
+PATH=`realpath $dir`:$PATH
+#export TMPDIR=$PWD
+if [[ -z $module ]] ; then
+	echo "Usage: $0 MODULE [ARGS]"
+fi
+if [[ -f author.ids ]] ; then
+	authors=author.ids
+elif [[ -f $dir/author.ids ]] ; then
+	authors=$dir/author.ids
+fi
+if [[ -d $module ]] ; then
+	echo "Updating $module..."
+else
+	echo "Importing $module..."
+	initial=1
+fi
+git-cvsimport -v -C $module -r cvs ${initial:+-p -x} -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R -T "$@" $module >> $module.log
