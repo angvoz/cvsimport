@@ -838,9 +838,11 @@ sub commit {
 	foreach my $rx (@mergerx) {
 		next unless $logmsg =~ $rx && $1;
 		my $mparent = $1 eq 'HEAD' ? $opt_o : $1;
-		if (my $sha1 = get_headref("$remote/$mparent")) {
-			push @commit_args, '-p', "$remote/$mparent";
+		if (my $sha1 = get_headref("$remote/$mparent") // get_headref("tags/$mparent")) {
+			push @commit_args, '-p', $sha1;
 			print "Merge parent branch: $mparent\n" if $opt_v;
+		} else {
+			print "Unknown merge parent: $mparent\n" if $opt_v;
 		}
 	}
 
