@@ -2684,12 +2684,12 @@ static void determine_branch_ancestor(PatchSet * ps, PatchSet * head_ps)
 	/* HACK: we sometimes pretend to derive from the import branch.  
 	 * just don't do that.  this is the easiest way to prevent... 
 	 */
-	d2 = (strcmp(rev->rev, "1.1.1.1") == 0) ? 0 : count_dots(rev->rev);
+	d2 = (strcmp(rev->rev, "1.1.1.1") == 0) ? -1 : count_dots(rev->rev);
 	
-	if (d2 > d1)
-	    head_ps->ancestor_branch = rev->branch;
+ 	debug(DEBUG_STATUS, "%d ancestry %s %s->%s %s", ps->psid, ps->branch, head_ps->ancestor_branch, rev->branch, rev->file->filename);
 
- 	//printf("-----> %d ancestry %s %s %s\n", ps->psid, ps->branch, head_ps->ancestor_branch, rev->file->filename);
+	if (d2 > d1 && strcmp(rev->branch, "#CVSPS_NO_BRANCH"))
+	    head_ps->ancestor_branch = rev->branch;
     }
 }
 
