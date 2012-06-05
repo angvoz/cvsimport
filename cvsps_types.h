@@ -46,17 +46,17 @@ struct _CvsFileRevision
      */
     PatchSetMember * pre_psm;
     PatchSetMember * post_psm;
-    struct list_head branch_children;
+    list_head branch_children; /* CvsFileRevision->link */
     
     /* 
      * for linking this 'first branch rev' into the parent branch_children
      */
-    struct list_head link;
+    list_node link; /* CvsFileRevision.branch_children */
 
     /*
      * A list of all Tag structures tagging this revision
      */
-    struct list_head tags;
+    list_head tags; /* Tag->rev_link */
 };
 
 struct _CvsFile
@@ -84,7 +84,7 @@ struct _PatchSetMember
      * bad_funk is only set w.r.t the -r tags
      */
     int bad_funk;
-    struct list_head link;
+    list_node link; /* PatchSet.members */
 };
 
 /* 
@@ -113,10 +113,10 @@ struct _PatchSet
     time_t max_date;
     char *descr;
     char *author;
-    struct list_head tags;
+    list_head tags; /* TagName->link */
     char *branch;
     char *ancestor_branch;
-    struct list_head members;
+    list_head members; /* PatchSetMember->link */
     /*
      * A 'branch add' patch set is a bogus patch set created automatically
      * when a 'file xyz was initially added on branch abc'
@@ -132,22 +132,22 @@ struct _PatchSet
     int funk_factor;
 
     /* for putting onto a list */
-    struct list_head all_link;
-    struct list_head collision_link;
+    list_node all_link; /* all_patch_sets */
+    list_node collision_link; /* collisions */
 };
 
 struct _PatchSetRange
 {
     int min_counter;
     int max_counter;
-    struct list_head link;
+    list_node link; /* show_patch_set_ranges */
 };
 
 struct _GlobalSymbol
 {
     char * tag;
     PatchSet * ps;
-    struct list_head tags;
+    list_head tags; /* Tag->global_link */
 };
 
 struct _Tag
@@ -155,15 +155,15 @@ struct _Tag
     GlobalSymbol * sym;
     CvsFileRevision * rev;
     char * tag;
-    struct list_head global_link;
-    struct list_head rev_link;
+    list_node global_link; /* GlobalSymbol.tags */
+    list_node rev_link; /* CvsFileRevision.tags */
 };
 
 struct _TagName
 {
     char * name;
     int flags;
-    struct list_head link;
+    list_node link; /* PatchSet.tags */
 };
 
 #endif /* CVSPS_TYPES_H */

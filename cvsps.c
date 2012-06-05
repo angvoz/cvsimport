@@ -83,8 +83,8 @@ static int do_write_cache;
 static int statistics;
 static const char * test_log_file;
 static struct hash_table * branch_heads;
-static struct list_head all_patch_sets;
-static struct list_head collisions;
+static LIST_HEAD(all_patch_sets);
+static LIST_HEAD(collisions);
 
 /* settable via options */
 static int timestamp_fuzz_factor = 300;
@@ -97,7 +97,7 @@ static regex_t restrict_file;
 static time_t restrict_date_start;
 static time_t restrict_date_end;
 static const char * restrict_branch;
-static struct list_head show_patch_set_ranges;
+static LIST_HEAD(show_patch_set_ranges);
 static int summary_first;
 static const char * norc = "";
 static const char * patch_set_dir;
@@ -130,7 +130,7 @@ static int compare_rev_strings(const char *, const char *);
 static int compare_patch_sets_by_members(const PatchSet * ps1, const PatchSet * ps2);
 static int compare_patch_sets_bk(const void *, const void *);
 static int compare_patch_sets(const void *, const void *);
-static int compare_patch_sets_bytime_list(struct list_head *, struct list_head *);
+static int compare_patch_sets_bytime_list(struct list_link *, struct list_link *);
 static int compare_patch_sets_bytime(const PatchSet *, const PatchSet *);
 static int is_revision_metadata(const char *);
 static int patch_set_member_regex(PatchSet * ps, regex_t * reg);
@@ -152,8 +152,6 @@ static void handle_collisions();
 int main(int argc, char *argv[])
 {
     debuglvl = DEBUG_APPERROR|DEBUG_SYSERROR|DEBUG_APPMSG1;
-
-    INIT_LIST_HEAD(&show_patch_set_ranges);
 
     /*
      * we want to parse the rc first, so command line can override it
@@ -182,8 +180,6 @@ int main(int argc, char *argv[])
     file_hash = create_hash_table(1023);
     global_symbols = create_hash_table(111);
     branch_heads = create_hash_table(1023);
-    INIT_LIST_HEAD(&all_patch_sets);
-    INIT_LIST_HEAD(&collisions);
 
     /* this parses some of the CVS/ files, and initializes
      * the repository_path and other variables 
@@ -671,7 +667,7 @@ static int parse_args(int argc, char *argv[])
 		else
 		    range->max_counter = INT_MAX;
 
-		list_add(&range->link, show_patch_set_ranges.prev);
+		list_ins(&range->link, &show_patch_set_ranges);
 	    }
 	    while ((min_str = strtok(NULL, ",")));
 
@@ -1225,7 +1221,7 @@ PatchSet * get_patch_set(const char * dte, const char * log, const char * author
      *    present in the existing ps.
      */
     if (psm)
-	list_add(&psm->link, retval->members.prev);
+	list_ins(&psm->link, &retval->members);
 
     find = (PatchSet**)tsearch(retval, &ps_tree, cmp1);
 
@@ -1427,7 +1423,7 @@ static void check_print_patch_set(PatchSet * ps)
     
     if (!list_empty(&show_patch_set_ranges))
     {
-	struct list_head * next = show_patch_set_ranges.next;
+	struct list_link * next = show_patch_set_ranges.next;
 	
 	while (next != &show_patch_set_ranges)
 	{
@@ -1481,7 +1477,7 @@ static void check_print_patch_set(PatchSet * ps)
 static void print_patch_set(PatchSet * ps)
 {
     struct tm *tm;
-    struct list_head * next;
+    struct list_link * next;
     const char * funk = "";
 
     tm = localtime(&ps->date);
@@ -1501,7 +1497,7 @@ static void print_patch_set(PatchSet * ps)
 	printf("Ancestor branch: %s\n", ps->ancestor_branch);
     {
 	printf("Tags:");
-	struct list_head * tagl;
+	struct list_link * tagl;
 	for (tagl = ps->tags.next; tagl != &ps->tags; tagl = tagl->next)
 	{
             TagName* tag = list_entry (tagl, TagName, link);
@@ -1609,12 +1605,12 @@ static int compare_rev_strings(const char * cr1, const char * cr2)
 
 static int compare_patch_sets_by_members(const PatchSet * ps1, const PatchSet * ps2)
 {
-    struct list_head * i;
+    struct list_link * i;
 
     for (i = ps1->members.next; i != &ps1->members; i = i->next)
     {
 	PatchSetMember * psm1 = list_entry(i, PatchSetMember, link);
-	struct list_head * j;
+	struct list_link * j;
 
 	for (j = ps2->members.next; j != &ps2->members; j = j->next)
 	{
@@ -1701,7 +1697,7 @@ static int compare_patch_sets(const void * v_ps1, const void * v_ps2)
     return (diff < 0) ? -1 : 1;
 }
 
-static int compare_patch_sets_bytime_list(struct list_head * l1, struct list_head * l2)
+static int compare_patch_sets_bytime_list(struct list_link * l1, struct list_link * l2)
 {
     const PatchSet *ps1 = list_entry(l1, PatchSet, all_link);
     const PatchSet *ps2 = list_entry(l2, PatchSet, all_link);
@@ -1763,7 +1759,7 @@ static int is_revision_metadata(const char * buff)
 
 static int patch_set_member_regex(PatchSet * ps, regex_t * reg)
 {
-    struct list_head * next = ps->members.next;
+    struct list_link * next = ps->members.next;
 
     while (next != &ps->members)
     {
@@ -1780,7 +1776,7 @@ static int patch_set_member_regex(PatchSet * ps, regex_t * reg)
 
 static int patch_set_affects_branch(PatchSet * ps, const char * branch)
 {
-    struct list_head * next;
+    struct list_link * next;
 
     for (next = ps->members.next; next != &ps->members; next = next->next)
     {
@@ -1805,7 +1801,7 @@ static int patch_set_affects_branch(PatchSet * ps, const char * branch)
 
 static void do_cvs_diff(PatchSet * ps)
 {
-    struct list_head * next;
+    struct list_link * next;
     const char * dtype;
     const char * dopts;
     const char * utype;
@@ -2272,7 +2268,7 @@ static void resolve_global_symbols()
     {
 	GlobalSymbol * sym = (GlobalSymbol*)he_sym->he_obj;
 	PatchSet * ps;
-	struct list_head * next;
+	struct list_link * next;
 
 	debug(DEBUG_STATUS, "resolving global symbol %s", sym->tag);
 
@@ -2290,7 +2286,7 @@ static void resolve_global_symbols()
 	    /* FIXME:test for rev->post_psm from DEBIAN. not sure how this could happen */
 	    if (!rev->present || !rev->post_psm)
 	    {
-		struct list_head *tmp = next->prev;
+		struct list_link *tmp = next->prev;
 		debug(DEBUG_APPERROR, "revision %s of file %s is tagged but not present",
 		      rev->rev, rev->file->filename);
 		/* FIXME: memleak */
@@ -2446,7 +2442,7 @@ void patch_set_add_member(PatchSet * ps, PatchSetMember * psm)
     /* check if a member for the same file already exists, if so
      * put this PatchSet on the collisions list 
      */
-    struct list_head * next;
+    struct list_link * next;
     for (next = ps->members.next; next != &ps->members; next = next->next) 
     {
 	PatchSetMember * m = list_entry(next, PatchSetMember, link);
@@ -2478,7 +2474,7 @@ void patch_set_add_member(PatchSet * ps, PatchSetMember * psm)
     }
 
     psm->ps = ps;
-    list_add(&psm->link, ps->members.prev);
+    list_ins(&psm->link, &ps->members);
 }
 
 static void set_psm_initial(PatchSetMember * psm)
@@ -2503,7 +2499,7 @@ static int check_rev_funk(PatchSet * ps, CvsFileRevision * rev)
 {
     int retval = TAG_FUNKY;
 
-    struct list_head * tag;
+    struct list_link * tag;
     for (tag = ps->tags.next; tag != &ps->tags; tag = tag->next)
     {
         char* tagname = list_entry (&tag, TagName, link)->name;
@@ -2511,7 +2507,7 @@ static int check_rev_funk(PatchSet * ps, CvsFileRevision * rev)
     while (rev)
     {
 	PatchSet * next_ps = rev->post_psm->ps;
-	struct list_head * next;
+	struct list_link * next;
 
 	if (next_ps->date > ps->date)
 	    break;
@@ -2594,7 +2590,7 @@ static int before_tag(CvsFileRevision * rev, const char * tag)
 /* FIXME: not sure if this needs to follow branches leading up to branches? */
 static CvsFileRevision * rev_follow_branch(CvsFileRevision * rev, const char * branch)
 {
-    struct list_head * next;
+    struct list_link * next;
 
     /* check for 'main line of inheritance' */
     if (strcmp(rev->branch, branch) == 0)
@@ -2628,7 +2624,7 @@ static void check_norc(int argc, char * argv[])
 
 static void determine_branch_ancestor(PatchSet * ps, PatchSet * head_ps)
 {
-    struct list_head * next;
+    struct list_link * next;
     CvsFileRevision * rev;
 
     /* PatchSet 1 has no ancestor */
@@ -2695,7 +2691,7 @@ static void determine_branch_ancestor(PatchSet * ps, PatchSet * head_ps)
 
 static void handle_collisions()
 {
-    struct list_head *next;
+    struct list_link *next;
     for (next = collisions.next; next != &collisions; next = next->next) 
     {
 	PatchSet * ps = list_entry(next, PatchSet, collision_link);
@@ -2705,7 +2701,7 @@ static void handle_collisions()
 
 void walk_all_patch_sets(void (*action)(PatchSet *))
 {
-    struct list_head * next;;
+    struct list_link * next;
     for (next = all_patch_sets.next; next != &all_patch_sets; next = next->next) {
 	PatchSet * ps = list_entry(next, PatchSet, all_link);
 	action(ps);

@@ -25,12 +25,12 @@
 #include "inline.h"
 #include <stddef.h>
 
-struct list_head {
-        struct list_head *next, *prev;
-};
+typedef struct list_link {
+        struct list_link *next, *prev;
+} list_head, list_node;
 
 #define LIST_HEAD(name) \
-        struct list_head name = { &name, &name }
+        list_head name = { &name, &name }
 
 #define INIT_LIST_HEAD(ptr)  do { \
         (ptr)->next = (ptr); (ptr)->prev = (ptr); \
@@ -46,9 +46,9 @@ struct list_head {
  * This is only for internal list manipulation where we know
  * the prev/next entries already!
  */
-static INLINE void __list_add(struct list_head *li,
-        struct list_head * prev,
-        struct list_head * next)
+static INLINE void __list_add(struct list_link *li,
+        struct list_link * prev,
+        struct list_link * next)
 {
         next->prev = li;
         li->next = next;
@@ -59,9 +59,17 @@ static INLINE void __list_add(struct list_head *li,
 /*
  * Insert a new entry after the specified head..
  */
-static INLINE void list_add(struct list_head *li, struct list_head *head)
+static INLINE void list_add(list_node *li, list_head *head)
 {
         __list_add(li, head, head->next);
+}
+
+/*
+ * Insert a new entry before the specified head..
+ */
+static INLINE void list_ins(list_node *li, list_head *head)
+{
+        __list_add(li, head->prev, head);
 }
 
 /*
@@ -71,19 +79,19 @@ static INLINE void list_add(struct list_head *li, struct list_head *head)
  * This is only for internal list manipulation where we know
  * the prev/next entries already!
  */
-static INLINE void __list_del(struct list_head * prev,
-                                  struct list_head * next)
+static INLINE void __list_del(struct list_link * prev,
+                                  struct list_link * next)
 {
         next->prev = prev;
         prev->next = next;
 }
 
-static INLINE void list_del(struct list_head *entry)
+static INLINE void list_del(list_node *entry)
 {
         __list_del(entry->prev, entry->next);
 }
 
-static INLINE int list_empty(struct list_head *head)
+static INLINE int list_empty(list_head *head)
 {
         return head->next == head;
 }
@@ -91,13 +99,13 @@ static INLINE int list_empty(struct list_head *head)
 /*
  * Splice in "list" into "head"
  */
-static INLINE void list_splice(struct list_head *list, struct list_head *head)
+static INLINE void list_splice(list_head *list, list_head *head)
 {
-        struct list_head *first = list->next;
+        struct list_link *first = list->next;
 
         if (first != list) {
-                struct list_head *last = list->prev;
-                struct list_head *at = head->next;
+                struct list_link *last = list->prev;
+                struct list_link *at = head->next;
 
                 first->prev = head;
                 head->next = first;

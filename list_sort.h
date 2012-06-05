@@ -8,6 +8,6 @@
 
 #include <cbtcommon/list.h>
 
-void list_sort(struct list_head *, int (*)(struct list_head *, struct list_head *));
+void list_sort(list_head *, int (*)(list_node *, list_node *));
 
 #endif /* LIST_SORT_H */

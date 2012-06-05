@@ -35,7 +35,7 @@ static void stat_ps_tree_node(const void * nodep, const VISIT which, const int d
 {
     int desc_len;
     PatchSet * ps;
-    struct list_head * next;
+    struct list_link * next;
     int counter;
     void * old;
 

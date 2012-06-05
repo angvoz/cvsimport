@@ -12,15 +12,15 @@ struct hash_entry
 {
     char              *he_key;
     void              *he_obj;
-    struct list_head   he_list;
+    list_node          he_list;
 };
 
 struct hash_table
 {
     int                ht_size;
-    struct list_head  *ht_lists;
+    list_head         *ht_lists;
     int                iterator;
-    struct list_head  *iterator_ptr;
+    struct list_link  *iterator_ptr;
 };
 
 enum

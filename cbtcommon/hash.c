@@ -16,7 +16,7 @@ RCSID("$Id: hash.c,v 1.6 2003/05/07 15:42:38 david Exp $");
 #define HASH_CONST 37
 
 static unsigned int hash_string(const char *);
-static struct hash_entry *scan_list(struct list_head *, const char *); 
+static struct hash_entry *scan_list(struct list_link *, const char *); 
 static struct hash_entry *get_hash_entry(struct hash_table *tbl, const char *key);
 
 struct hash_table *create_hash_table(unsigned int sz)
@@ -24,7 +24,7 @@ struct hash_table *create_hash_table(unsigned int sz)
     struct hash_table *tbl;
     unsigned int i;
 
-    tbl = (struct hash_table *)malloc(sizeof(*tbl) + sz*sizeof(struct list_head));
+    tbl = (struct hash_table *)malloc(sizeof(*tbl) + sz*sizeof(struct list_link));
 
     if (!tbl)
     {
@@ -33,7 +33,7 @@ struct hash_table *create_hash_table(unsigned int sz)
     }
 	
     tbl->ht_size  = sz;
-    tbl->ht_lists = (struct list_head *)(tbl + 1);
+    tbl->ht_lists = (struct list_link *)(tbl + 1);
     tbl->iterator = 0;
 
     for (i = 0; i < sz; i++)
@@ -44,7 +44,7 @@ struct hash_table *create_hash_table(unsigned int sz)
 
 void destroy_hash_table(struct hash_table *tbl, void (*delete_obj)(void *))
 {
-    struct list_head  *head, *next, *tmp;
+    struct list_link  *head, *next, *tmp;
     struct hash_entry *entry;
     int i;
 
@@ -80,7 +80,7 @@ void *put_hash_object(struct hash_table *tbl, const char *key, void *obj)
 
 static struct hash_entry *get_hash_entry(struct hash_table *tbl, const char *key)
 {
-    struct list_head  *head;
+    struct list_link  *head;
     struct hash_entry *entry;
     unsigned int hash;
 
@@ -122,9 +122,9 @@ static unsigned int hash_string(register const char *key)
     return hash;
 }
 
-static struct hash_entry *scan_list(struct list_head *head, const char *key)
+static struct hash_entry *scan_list(struct list_link *head, const char *key)
 {
-    struct list_head  *next = head->next;
+    struct list_link  *next = head->next;
     struct hash_entry *entry;
 
     while (next != head)
@@ -149,14 +149,14 @@ struct hash_entry *next_hash_entry(struct hash_table *tbl)
 {
     while( tbl->iterator < tbl->ht_size )
     {
-	struct list_head *head = &tbl->ht_lists[ tbl->iterator ];
+	struct list_link *head = &tbl->ht_lists[ tbl->iterator ];
 
 	if( tbl->iterator_ptr == NULL )
 	    tbl->iterator_ptr = head->next;
 
 	if( tbl->iterator_ptr != head )
 	{
-	    struct list_head *tmp = tbl->iterator_ptr;
+	    struct list_link *tmp = tbl->iterator_ptr;
 	    tbl->iterator_ptr = tbl->iterator_ptr->next;
 	    return( list_entry( tmp, struct hash_entry, he_list ) );
 	}
@@ -174,7 +174,7 @@ struct hash_entry *next_hash_entry(struct hash_table *tbl)
 int put_hash_object_ex(struct hash_table *tbl, const char *key, void *obj, int copy, 
 		       char ** oldkey, void ** oldobj)
 {
-    struct list_head *head;
+    struct list_link *head;
     struct hash_entry *entry;
     unsigned int hash;
     int retval = 0;
@@ -247,7 +247,7 @@ void destroy_hash_table_ex(struct hash_table *tbl,
 			   void (*delete_entry)(const void *, char *, void *), 
 			   const void * cookie)
 {
-    struct list_head  *head, *next, *tmp;
+    struct list_link  *head, *next, *tmp;
     struct hash_entry *entry;
     int i;
     

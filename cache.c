@@ -358,7 +358,7 @@ static void parse_cache_revision(PatchSetMember * psm, const char * buff)
     int bp = 0;
     int state = CR_FILENAME;
     const char *sep;
-    char * p;
+    const char * p;
     char * c;
 
     for (p = buff, sep = buff;			  /* just ensure sep is non-NULL */
@@ -494,7 +494,7 @@ static void write_patch_set_to_cache(PatchSet * ps)
 
 static void dump_patch_set(FILE * fp, PatchSet * ps)
 {
-    struct list_head * next = ps->members.next;
+    struct list_link * next = ps->members.next;
 
     ps_counter++;
     fprintf(fp, "patchset: %d\n", ps_counter);
@@ -502,7 +502,7 @@ static void dump_patch_set(FILE * fp, PatchSet * ps)
     fprintf(fp, "author: %s\n", ps->author);
     {
 	fprintf(fp, "tags:");
-	struct list_head * tag;
+	struct list_link * tag;
 	for (tag = ps->tags.next; tag != &ps->tags; tag = tag->next)
 	{
             TagName* tagname = list_entry (tag, TagName, link);

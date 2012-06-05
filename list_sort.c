@@ -7,10 +7,10 @@
 #include <stdlib.h>
 #include "list_sort.h"
 
-void list_sort(struct list_head * list, int (*node_compare)(struct list_head *, struct list_head *))
+void list_sort(list_head * list, int (*node_compare)(list_node *, list_node *))
 {
-    struct list_head *p, *q, *t;
-    struct list_head tmp;
+    struct list_link *p, *q, *t;
+    struct list_link tmp;
     int merges = 0;
     int k = 1;
     int psize, qsize; 
