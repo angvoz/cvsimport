@@ -11,7 +11,6 @@ OBJS=\
 	cbtcommon/sio.o\
 	cbtcommon/tcpsocket.o\
 	cvsps.o\
-	cache.o\
 	util.o\
 	stats.o\
 	cap.o\
@@ -41,8 +40,6 @@ clean:
 .PHONY: install clean
 # DO NOT DELETE
 
-cache.o: ./cbtcommon/hash.h ./cbtcommon/list.h ./cbtcommon/inline.h
-cache.o: ./cbtcommon/debug.h cache.h cvsps_types.h cvsps.h util.h
 cap.o: ./cbtcommon/debug.h ./cbtcommon/inline.h ./cbtcommon/text_util.h cap.h
 cap.o: cvs_direct.h
 cvs_direct.o: ./cbtcommon/debug.h ./cbtcommon/inline.h
@@ -50,7 +47,7 @@ cvs_direct.o: ./cbtcommon/text_util.h ./cbtcommon/tcpsocket.h
 cvs_direct.o: ./cbtcommon/sio.h cvs_direct.h util.h
 cvsps.o: ./cbtcommon/hash.h ./cbtcommon/list.h ./cbtcommon/inline.h
 cvsps.o: ./cbtcommon/list.h ./cbtcommon/text_util.h ./cbtcommon/debug.h
-cvsps.o: ./cbtcommon/rcsid.h cache.h cvsps_types.h cvsps.h util.h stats.h
+cvsps.o: ./cbtcommon/rcsid.h cvsps_types.h cvsps.h util.h stats.h
 cvsps.o: cap.h cvs_direct.h list_sort.h
 list_sort.o: list_sort.h ./cbtcommon/list.h
 stats.o: ./cbtcommon/hash.h ./cbtcommon/list.h ./cbtcommon/inline.h

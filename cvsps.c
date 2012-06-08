@@ -23,7 +23,6 @@
 #include <cbtcommon/debug.h>
 #include <cbtcommon/rcsid.h>
 
-#include "cache.h"
 #include "cvsps_types.h"
 #include "cvsps.h"
 #include "util.h"
@@ -83,10 +82,6 @@ static void * ps_tree;
 static struct hash_table * global_symbols;
 static char strip_path[PATH_MAX];
 static int strip_path_len;
-static time_t cache_date;
-static int update_cache;
-static int ignore_cache;
-static int do_write_cache;
 static int statistics;
 static const char * test_log_file;
 static struct hash_table * branch_heads;
@@ -195,31 +190,10 @@ int main(int argc, char *argv[])
      */
     init_paths();
 
-    if (!ignore_cache)
-    {
-	int save_fuzz_factor = timestamp_fuzz_factor;
-
-	/* the timestamp fuzz should only be in effect when loading from
-	 * CVS, not re-fuzzed when loading from cache.  This is a hack
-	 * working around bad use of global variables
-	 */
-
-	timestamp_fuzz_factor = 0;
-
-	if ((cache_date = read_cache()) < 0)
-	    update_cache = 1;
-
-	timestamp_fuzz_factor = save_fuzz_factor;
-    }
-
-    if (cvs_direct && (do_diff || (update_cache && !test_log_file)))
+    if (cvs_direct && (do_diff || !test_log_file))
 	cvs_direct_ctx = open_cvs_server(root_path, compress);
 
-    if (update_cache)
-    {
-	load_from_cvs();
-	// do_write_cache = 1;
-    }
+    load_from_cvs();
 
     //XXX
     //handle_collisions();
@@ -232,9 +206,6 @@ int main(int argc, char *argv[])
     handle_collisions();
 
     resolve_global_symbols();
-
-    if (do_write_cache)
-	write_cache(cache_date);
 
     if (statistics)
 	print_statistics(ps_tree);
@@ -278,7 +249,6 @@ static void load_from_cvs()
     int loglen = 0;
     int have_log = 0;
     char cmd[BUFSIZ];
-    char date_str[64];
     char use_rep_buff[PATH_MAX];
     char * ltype;
 
@@ -299,37 +269,15 @@ static void load_from_cvs()
 	use_rep_buff[0] = 0;
     }
 
-    if (cache_date > 0)
-    {
-	struct tm * tm = gmtime(&cache_date);
-	strftime(date_str, 64, "%d %b %Y %H:%M:%S %z", tm);
-
-	/* this command asks for logs using two different date
-	 * arguments, separated by ';' (see man rlog).  The first
-	 * gets all revisions more recent than date, the second 
-	 * gets a single revision no later than date, which combined
-	 * get us all revisions that have occurred since last update
-	 * and overlaps what we had before by exactly one revision,
-	 * which is necessary to fill in the pre_rev stuff for a 
-	 * PatchSetMember
-	 */
-	snprintf(cmd, BUFSIZ, "cvs %s %s -q %s -d '%s<;%s' %s", compress_arg, norc, ltype, date_str, date_str, use_rep_buff);
-    }
-    else
-    {
-	date_str[0] = 0;
-	snprintf(cmd, BUFSIZ, "cvs %s %s -q %s %s", compress_arg, norc, ltype, use_rep_buff);
-    }
+    snprintf(cmd, BUFSIZ, "cvs %s %s -q %s %s", compress_arg, norc, ltype, use_rep_buff);
     
     debug(DEBUG_STATUS, "******* USING CMD %s", cmd);
-
-    cache_date = time(NULL);
 
     /* FIXME: this is ugly, need to virtualize the accesses away from here */
     if (test_log_file)
 	cvsfp = fopen(test_log_file, "r");
     else if (cvs_direct_ctx)
-	cvsfp = cvs_rlog_open(cvs_direct_ctx, repository_path, date_str);
+	cvsfp = cvs_rlog_open(cvs_direct_ctx, repository_path, "");
     else
 	cvsfp = popen(cmd, "r");
 
@@ -615,8 +563,6 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "");
     debug(DEBUG_APPERROR, "Where:");
     debug(DEBUG_APPERROR, "  -h display this informative message");
-    debug(DEBUG_APPERROR, "  -x ignore (and rebuild) cvsps.cache file");
-    debug(DEBUG_APPERROR, "  -u update cvsps.cache file");
     debug(DEBUG_APPERROR, "  -z <fuzz> set the timestamp fuzz factor for identifying patch sets");
     debug(DEBUG_APPERROR, "  -g generate diffs of the selected patch sets");
     debug(DEBUG_APPERROR, "  -s <patch set>[-[<patch set>]][,<patch set>...] restrict patch sets by id");
@@ -774,21 +720,6 @@ static int parse_args(int argc, char *argv[])
 	    else
 		restrict_tag_start = argv[i];
 
-	    i++;
-	    continue;
-	}
-
-	if (strcmp(argv[i], "-u") == 0)
-	{
-	    update_cache = 1;
-	    i++;
-	    continue;
-	}
-	
-	if (strcmp(argv[i], "-x") == 0)
-	{
-	    ignore_cache = 1;
-	    update_cache = 1;
 	    i++;
 	    continue;
 	}
