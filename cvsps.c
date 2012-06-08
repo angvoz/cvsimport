@@ -70,6 +70,13 @@ const char * fnk_descr[] = {
     "FNK_HIDE_SOME"
 };
 
+static const GlobalSymbol head_sym = { "HEAD" };
+static const Tag head_tag = { &head_sym, NULL, 1 };
+static const char *no_branch = "#CVSPS_NO_BRANCH";
+
+#define BRANCH_NAME(SYM) ((SYM) ? (SYM)->tag : no_branch)
+#define PS_BRANCH(PS) BRANCH_NAME((PS)->branch)
+
 /* static globals */
 static int ps_counter;
 static void * ps_tree;
@@ -83,8 +90,8 @@ static int do_write_cache;
 static int statistics;
 static const char * test_log_file;
 static struct hash_table * branch_heads;
-static LIST_HEAD(all_patch_sets);
-static LIST_HEAD(collisions);
+static LIST_HEAD(all_patch_sets); /* PatchSet->all_link */
+static LIST_HEAD(collisions); /* PatchSet->collision_link */
 
 /* settable via options */
 static int timestamp_fuzz_factor = 300;
@@ -97,7 +104,7 @@ static regex_t restrict_file;
 static time_t restrict_date_start;
 static time_t restrict_date_end;
 static const char * restrict_branch;
-static LIST_HEAD(show_patch_set_ranges);
+static LIST_HEAD(show_patch_set_ranges); /* PatchSetRange->link */
 static int summary_first;
 static const char * norc = "";
 static const char * patch_set_dir;
@@ -119,9 +126,12 @@ static int parse_rc();
 static void load_from_cvs();
 static void init_paths();
 static CvsFile * build_file_by_name(const char *);
+static int get_branch_ext(char *, const char *, int *);
+static int get_branch(char *, const char *);
 static CvsFile * parse_rcs_file(const char *);
 static CvsFile * parse_working_file(const char *);
 static CvsFileRevision * parse_revision(CvsFile * file, char * rev_str);
+static Tag *find_branch_tag(CvsFileRevision *, int);
 static void assign_pre_revision(PatchSetMember *, CvsFileRevision * rev);
 static void check_print_patch_set(PatchSet *);
 static void print_patch_set(PatchSet *);
@@ -140,12 +150,11 @@ static PatchSet * create_patch_set();
 static PatchSetRange * create_patch_set_range();
 static void parse_sym(CvsFile *, char *);
 static void resolve_global_symbols();
-static int revision_affects_branch(CvsFileRevision *, const char *);
+static int revision_affects_symbol(CvsFileRevision *, const char *);
 static int is_vendor_branch(const char *);
 static void set_psm_initial(PatchSetMember * psm);
-static int check_rev_funk(PatchSet *, CvsFileRevision *);
-static CvsFileRevision * rev_follow_branch(CvsFileRevision *, const char *);
-static int before_tag(CvsFileRevision * rev, const char * tag);
+static int check_tag_funk(PatchSet *, const char *, CvsFileRevision *);
+static CvsFileRevision * rev_follow_branch(CvsFileRevision *, const GlobalSymbol *);
 static void determine_branch_ancestor(PatchSet * ps, PatchSet * head_ps);
 static void handle_collisions();
 
@@ -209,7 +218,7 @@ int main(int argc, char *argv[])
     if (update_cache)
     {
 	load_from_cvs();
-	do_write_cache = 1;
+	// do_write_cache = 1;
     }
 
     //XXX
@@ -384,7 +393,7 @@ static void load_from_cvs()
 		state = NEED_REVISION;
 	    break;
 	case NEED_REVISION:
-	    if (strncmp(buff, "revision", 8) == 0)
+	    if (strncmp(buff, "revision ", 9) == 0)
 	    {
 		char new_rev[REV_STR_MAX];
 		CvsFileRevision * rev;
@@ -495,13 +504,40 @@ static void load_from_cvs()
 		file = NULL;
 		state = NEED_RCS_FILE;
 	    }
-	    else
+	    else if (!have_log && is_revision_metadata(buff))
 	    {
 		/* other "blahblah: information;" messages can 
 		 * follow the stuff we pay attention to
 		 */
-		if (have_log || !is_revision_metadata(buff))
+		if (strncmp(buff, "branches:  ", 11) == 0)
 		{
+		    char *branch = buff+11, *end;
+		    char brev[REV_STR_MAX];
+		    int bid;
+		    while (*branch && (end = strchr(branch, ';'))) 
+		    {
+			*end = 0;
+
+			if (get_branch_ext(brev, branch, &bid) && psm)
+			{
+			    Tag *tag = find_branch_tag(psm->post_rev, bid);
+			    if (!tag)
+				debug(DEBUG_APPMSG1, "WARNING: unnamed branch %s:%s", file->filename, branch);
+			    /* TODO: add? fill in pre_rev for .1? */
+			}
+
+			branch = end+1;
+			while (*branch == ' ')
+			    branch++;
+		    }
+		}
+		else
+		{
+		    debug(DEBUG_STATUS, "ignoring unhandled info %s", buff);
+		}
+	    }
+	    else
+	    {
 		    /* If the log buffer is full, try to reallocate more. */
 		    if (loglen < logbufflen)
 		    {
@@ -526,11 +562,6 @@ static void load_from_cvs()
 			logbuff[loglen] = 0;
 			have_log = 1;
 		    }
-		}
-		else 
-		{
-		    debug(DEBUG_STATUS, "ignoring unhandled info %s", buff);
-		}
 	    }
 
 	    break;
@@ -1195,7 +1226,7 @@ static CvsFile * build_file_by_name(const char * fn)
     return retval;
 }
 
-PatchSet * get_patch_set(const char * dte, const char * log, const char * author, const char * branch, PatchSetMember * psm)
+PatchSet * get_patch_set(const char * dte, const char * log, const char * author, const Tag * branch, PatchSetMember * psm)
 {
     PatchSet * retval = NULL, **find = NULL;
     int (*cmp1)(const void *,const void*) = (bkcvs) ? compare_patch_sets_bk : compare_patch_sets;
@@ -1209,7 +1240,7 @@ PatchSet * get_patch_set(const char * dte, const char * log, const char * author
     convert_date(&retval->date, dte);
     retval->author = get_string(author);
     retval->descr = xstrdup(log);
-    retval->branch = get_string(branch);
+    retval->branch = branch ? branch->sym : NULL;
     
     /* we are looking for a patchset suitable for holding this member.
      * this means two things:
@@ -1492,7 +1523,7 @@ static void print_patch_set(PatchSet * ps)
 	   1900 + tm->tm_year, tm->tm_mon + 1, tm->tm_mday, 
 	   tm->tm_hour, tm->tm_min, tm->tm_sec);
     printf("Author: %s\n", ps->author);
-    printf("Branch: %s\n", ps->branch);
+    printf("Branch: %s\n", PS_BRANCH(ps));
     if (ps->ancestor_branch)
 	printf("Ancestor branch: %s\n", ps->ancestor_branch);
     {
@@ -1500,9 +1531,9 @@ static void print_patch_set(PatchSet * ps)
 	struct list_link * tagl;
 	for (tagl = ps->tags.next; tagl != &ps->tags; tagl = tagl->next)
 	{
-            TagName* tag = list_entry (tagl, TagName, link);
+            GlobalSymbol* tag = list_entry (tagl, GlobalSymbol, link);
 
-	    printf(" %s %s%s", tag->name, tag_flag_descr[tag->flags],
+	    printf(" %s %s%s", tag->tag, tag_flag_descr[tag->flags],
 		   (tagl->next == &ps->tags) ? "" : ",");
 	}
 	printf("\n");
@@ -1546,13 +1577,13 @@ static void assign_patchset_id(PatchSet * ps)
 	ps_counter++;
 	ps->psid = ps_counter;
 	
-	if (track_branch_ancestry && strcmp(ps->branch, "HEAD") != 0)
+	if (track_branch_ancestry && ps->branch && ps->branch != &head_sym)
 	{
-	    PatchSet * head_ps = (PatchSet*)get_hash_object(branch_heads, ps->branch);
+	    PatchSet * head_ps = (PatchSet*)get_hash_object(branch_heads, ps->branch->tag);
 	    if (!head_ps) 
 	    {
 		head_ps = ps;
-		put_hash_object(branch_heads, ps->branch, head_ps);
+		put_hash_object(branch_heads, ps->branch->tag, head_ps);
 	    }
 	    
 	    determine_branch_ancestor(ps, head_ps);
@@ -1659,9 +1690,9 @@ static int compare_patch_sets(const void * v_ps1, const void * v_ps2)
     if (ret)
 	    return ret;
 
-    ret = strcmp(ps1->branch, ps2->branch);
-    if (ret)
-	return ret;
+    diff = ps1->branch - ps2->branch;
+    if (diff)
+	return (diff < 0) ? -1 : 1;
 
     ret = compare_patch_sets_by_members(ps1, ps2);
     if (ret)
@@ -1730,8 +1761,11 @@ static int compare_patch_sets_bytime(const PatchSet * ps1, const PatchSet * ps2)
     if (ret)
 	return ret;
 
-    ret = strcmp(ps1->branch, ps2->branch);
-    return ret;
+    diff = ps1->branch - ps2->branch;
+    if (diff)
+	return (diff < 0) ? -1 : 1;
+
+    return 0;
 }
 
 
@@ -1792,7 +1826,7 @@ static int patch_set_affects_branch(PatchSet * ps, const char * branch)
 	if (ps->funk_factor == FNK_SHOW_SOME && psm->bad_funk)
 	    continue;
 
-	if (revision_affects_branch(psm->post_rev, branch))
+	if (revision_affects_symbol(psm->post_rev, branch) > 0)
 	    return 1;
     }
 
@@ -1967,6 +2001,22 @@ static CvsFileRevision * parse_revision(CvsFile * file, char * rev_str)
     return cvs_file_add_revision(file, rev_str);
 }
 
+static Tag *find_branch_tag(CvsFileRevision *rev, int branch)
+{
+    struct list_link *next;
+
+    for (next = rev->tags.next; next != &rev->tags; next = next->next)
+    {
+	Tag *tag = list_entry(next, Tag, rev_link);
+	if (tag->branch == branch)
+	    return tag;
+	if (!tag->branch)
+	    break;
+    }
+
+    return NULL;
+}
+
 CvsFileRevision * cvs_file_add_revision(CvsFile * file, const char * rev_str)
 {
     CvsFileRevision * rev;
@@ -2002,6 +2052,7 @@ CvsFileRevision * cvs_file_add_revision(CvsFile * file, const char * rev_str)
     if (!rev->branch && file->have_branches)
     {
 	char branch_str[REV_STR_MAX];
+	int branch_id;
 
 	/* in the cvs cvs repository (ccvs) there are tagged versions
 	 * that don't exist.  let's mark every 'known to exist' 
@@ -2016,23 +2067,29 @@ CvsFileRevision * cvs_file_add_revision(CvsFile * file, const char * rev_str)
 	    exit(1);
 	}
 	
-	rev->branch = (char*)get_hash_object(file->branches, branch_str);
-	
-	/* if there's no branch and it's not on the trunk, blab */
-	if (!rev->branch)
+	if (get_branch_ext(branch_str, branch_str, &branch_id)) 
 	{
-	    if (get_branch(branch_str, branch_str))
-	    {
+	    CvsFileRevision *brev;
+
+	    brev = cvs_file_add_revision(file, branch_str);
+	    rev->branch = find_branch_tag(brev, branch_id);
+	    
+	    /* if there's no branch, blab and make one */
+	    if (!rev->branch) {
 		debug(DEBUG_APPMSG1, "WARNING: revision %s of file %s on unnamed branch", rev->rev, rev->file->filename);
-		rev->branch = "#CVSPS_NO_BRANCH";
-	    }
-	    else
-	    {
-		rev->branch = "HEAD";
+		Tag *tag = (Tag*)calloc(1, sizeof(*tag));
+		tag->branch = branch_id;
+		tag->rev = brev;
+		rev->branch = tag;
+		list_add(&tag->rev_link, &brev->tags);
 	    }
 	}
-
-	debug(DEBUG_STATUS, "revision %s of file %s on branch %s", rev->rev, rev->file->filename, rev->branch);
+	else
+	{
+	    rev->branch = &head_tag;
+	}
+	
+	debug(DEBUG_STATUS, "revision %s of file %s on branch %s", rev->rev, rev->file->filename, BRANCH_NAME(rev->branch->sym));
     }
 
     return rev;
@@ -2045,20 +2102,21 @@ CvsFile * create_cvsfile()
 	return NULL;
 
     f->revisions = create_hash_table(53);
-    f->branches = create_hash_table(13);
-    f->branches_sym = create_hash_table(13);
     f->symbols = create_hash_table(253);
     f->have_branches = 0;
 
-    if (!f->revisions || !f->branches || !f->branches_sym)
+    if (!f->revisions || !f->symbols)
     {
-	if (f->branches)
-	    destroy_hash_table(f->branches, NULL);
 	if (f->revisions)
 	    destroy_hash_table(f->revisions, NULL);
+	if (f->symbols)
+	    destroy_hash_table(f->symbols, NULL);
 	free(f);
 	return NULL;
     }
+
+    /* for convenience */
+    put_hash_object_ex(f->symbols, "HEAD", (void *)&head_tag, HT_NO_KEYCOPY, NULL, NULL);
    
     return f;
 }
@@ -2172,36 +2230,34 @@ static void parse_sym(CvsFile * file, char * sym)
 
     if (final_branch == 0)
     {
-	snprintf(rev, REV_STR_MAX, "%s.%d", rev2, leaf);
-	debug(DEBUG_STATUS, "got sym: %s for %s", tag, rev);
+	debug(DEBUG_STATUS, "got sym: %s for %s.%d", tag, rev2, leaf);
 	
-	cvs_file_add_branch(file, rev, tag);
+	cvs_file_add_symbol(file, rev2, tag, leaf);
+    }
+    else if (is_vendor_branch(eot)) {
+	/* see cvs manual: what is this vendor tag? */
+	cvs_file_add_symbol(file, rev, tag, leaf);
     }
     else
     {
 	strcpy(rev, eot);
 	chop(rev);
 
-	/* see cvs manual: what is this vendor tag? */
-	if (is_vendor_branch(rev))
-	    cvs_file_add_branch(file, rev, tag);
-	else
-	    cvs_file_add_symbol(file, rev, tag);
+	cvs_file_add_symbol(file, rev, tag, 0);
     }
 }
 
-void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char * p_tag_str)
+void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char * p_tag_str, int branch)
 {
     CvsFileRevision * rev;
     GlobalSymbol * sym;
-    Tag * tag;
+    Tag * tag = NULL;
+    struct list_link *next;
 
     /* get a permanent storage string */
     char * tag_str = get_string(p_tag_str);
 
-    debug(DEBUG_STATUS, "adding symbol to file: %s %s->%s", file->filename, tag_str, rev_str);
-    rev = cvs_file_add_revision(file, rev_str);
-    put_hash_object_ex(file->symbols, tag_str, rev, HT_NO_KEYCOPY, NULL, NULL);
+    debug(DEBUG_STATUS, "adding symbol to file: %s %s->%s.%d", file->filename, tag_str, rev_str, branch);
     
     /*
      * check the global_symbols
@@ -2213,38 +2269,49 @@ void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char * p_ta
 	sym->tag = tag_str;
 	sym->ps = NULL;
 	INIT_LIST_HEAD(&sym->tags);
+	INIT_LIST_HEAD(&sym->link);
 
 	put_hash_object_ex(global_symbols, sym->tag, sym, HT_NO_KEYCOPY, NULL, NULL);
     }
 
-    tag = (Tag*)malloc(sizeof(*tag));
-    tag->tag = tag_str;
-    tag->rev = rev;
-    tag->sym = sym;
-    list_add(&tag->global_link, &sym->tags);
-    list_add(&tag->rev_link, &rev->tags);
-}
+    rev = cvs_file_add_revision(file, rev_str);
 
-char * cvs_file_add_branch(CvsFile * file, const char * rev, const char * tag)
-{
-    char * new_tag;
-    char * new_rev;
-
-    if (get_hash_object(file->branches, rev))
+    /* do some sanity checks (should be unnecessary) */
+    for (next = rev->tags.next; next != &rev->tags; next = next->next) 
     {
-	debug(DEBUG_STATUS, "attempt to add existing branch %s:%s to %s", 
-	      rev, tag, file->filename);
-	return NULL;
+	tag = list_entry(next, Tag, rev_link);
+	if (tag->sym == sym)
+	{
+	    if (tag->branch != branch)
+		debug(DEBUG_APPERROR, "conflicting tag and branch %s:%s on %s", rev_str, tag_str, file->filename);
+	    return;
+	}
+	if (branch && tag->branch == branch)
+	{
+	    if (!tag->sym)
+	    {
+		debug(DEBUG_STATUS, "filling in branch name %s.%d:%s on %s", rev_str, branch, tag_str, file->filename);
+		tag->sym = sym;
+		list_add(&tag->global_link, &sym->tags);
+	    }
+	    else
+		debug(DEBUG_APPERROR, "attempt to add existing branch %s:%s to %s", rev_str, tag_str, file->filename);
+	    return;
+	}
     }
 
-    /* get permanent storage for the strings */
-    new_tag = get_string(tag);
-    new_rev = get_string(rev); 
+    tag = (Tag*)malloc(sizeof(*tag));
+    tag->rev = rev;
+    tag->sym = sym;
+    tag->branch = branch;
+    list_add(&tag->global_link, &sym->tags);
+    /* branches at beginning, tags at end */
+    if (branch)
+	list_add(&tag->rev_link, &rev->tags);
+    else
+	list_ins(&tag->rev_link, &rev->tags);
 
-    put_hash_object_ex(file->branches, new_rev, new_tag, HT_NO_KEYCOPY, NULL, NULL);
-    put_hash_object_ex(file->branches_sym, new_tag, new_rev, HT_NO_KEYCOPY, NULL, NULL);
-    
-    return new_tag;
+    put_hash_object_ex(file->symbols, tag_str, tag, HT_NO_KEYCOPY, NULL, NULL);
 }
 
 /*
@@ -2267,7 +2334,7 @@ static void resolve_global_symbols()
     while ((he_sym = next_hash_entry(global_symbols)))
     {
 	GlobalSymbol * sym = (GlobalSymbol*)he_sym->he_obj;
-	PatchSet * ps;
+	PatchSet * ps = NULL;
 	struct list_link * next;
 
 	debug(DEBUG_STATUS, "resolving global symbol %s", sym->tag);
@@ -2295,14 +2362,11 @@ static void resolve_global_symbols()
 		continue;
 	    }
 
-	    ps = rev->post_psm->ps;
-
-	    if (!sym->ps || ps->date > sym->ps->date)
-		sym->ps = ps;
+	    if (!ps || rev->post_psm->ps->psid > ps->psid)
+		ps = rev->post_psm->ps;
 	}
 	
-	/* convenience variable */
-	ps = sym->ps;
+	sym->ps = ps;
 
 	if (!ps)
 	{
@@ -2310,12 +2374,8 @@ static void resolve_global_symbols()
 	    return;
 	}
 
-	{
-	    TagName* tagname = (TagName*)malloc(sizeof(TagName));
-	    tagname->name = sym->tag;
-	    tagname->flags = 0;
-	    list_add(&tagname->link, &ps->tags);
-	}
+	sym->flags = 0;
+	list_add(&sym->link, &ps->tags);
 
 	/* check if this ps is one of the '-r' patchsets */
 	if (restrict_tag_start && strcmp(restrict_tag_start, sym->tag) == 0)
@@ -2328,17 +2388,17 @@ static void resolve_global_symbols()
 
 	    if (restrict_branch)
 	    {
-		if (strcmp(ps->branch, restrict_branch) != 0)
+		if (!ps->branch || strcmp(ps->branch->tag, restrict_branch) != 0)
 		{
 		    debug(DEBUG_APPMSG1, 
 			  "WARNING: -b option and second -r have conflicting branches: %s %s", 
-			  restrict_branch, ps->branch);
+			  restrict_branch, PS_BRANCH(ps));
 		}
 	    }
-	    else
+	    else if (ps->branch)
 	    {
-		debug(DEBUG_APPMSG1, "NOTICE: implicit branch restriction set to %s", ps->branch);
-		restrict_branch = ps->branch;
+		debug(DEBUG_APPMSG1, "NOTICE: implicit branch restriction set to %s", ps->branch->tag);
+		restrict_branch = ps->branch->tag;
 	    }
 	}
 
@@ -2353,67 +2413,75 @@ static void resolve_global_symbols()
 	    Tag * tag = list_entry(next, Tag, global_link);
 	    CvsFileRevision * rev = tag->rev;
 	    CvsFileRevision * next_rev = rev_follow_branch(rev, ps->branch);
-	    
+
 	    if (!next_rev)
 		continue;
-		
+
 	    /*
 	     * we want the 'tagged revision' to be valid until after
 	     * the date of the 'tagged patchset' or else there's something
 	     * funky going on
 	     */
-	    if (next_rev->post_psm->ps->date < ps->date)
+	    if (next_rev->post_psm->ps->psid <= ps->psid)
 	    {
-		int flag = check_rev_funk(ps, next_rev);
+		int flag = TAG_FUNKY;
+		if (check_tag_funk(ps, sym->tag, next_rev))
+		    flag = TAG_INVALID;
 		debug(DEBUG_STATUS, "file %s revision %s tag %s: TAG VIOLATION %s",
 		      rev->file->filename, rev->rev, sym->tag, tag_flag_descr[flag]);
-		/* FIXME: using tags.next is somewhat kludgy */
-		list_entry(ps->tags.next, TagName, link)->flags |= flag;
+		sym->flags |= flag;
+		tag->flags = flag;
 	    }
 	}
     }
 }
 
-static int revision_affects_branch(CvsFileRevision * rev, const char * branch)
+static void get_sym_revision(char *rev, Tag *sym)
 {
-    /* special case the branch called 'HEAD' */
-    if (strcmp(branch, "HEAD") == 0)
-    {
-	/* look for only one '.' in rev */
-	char * p = strchr(rev->rev, '.');
-	if (p && !strchr(p + 1, '.'))
-	    return 1;
-    }
-    else
-    {
-	char * branch_rev = (char*)get_hash_object(rev->file->branches_sym, branch);
-	
-	if (branch_rev)
-	{
-	    char post_rev[REV_STR_MAX];
-	    char branch[REV_STR_MAX];
-	    int file_leaf, branch_leaf;
-	    
-	    strcpy(branch, branch_rev);
-	    
-	    /* first get the branch the file rev is on */
-	    if (get_branch_ext(post_rev, rev->rev, &file_leaf))
-	    {
-		branch_leaf = file_leaf;
-		
-		/* check against branch and all branch ancestor branches */
-		do 
-		{
-		    debug(DEBUG_STATUS, "check %s against %s for %s", branch, post_rev, rev->file->filename);
-		    if (strcmp(branch, post_rev) == 0)
-			return (file_leaf <= branch_leaf);
-		}
-		while(get_branch_ext(branch, branch, &branch_leaf));
-	    }
-	}
-    }
+    unsigned len = 0;
 
-    return 0;
+    if (sym->rev) {
+	len = strlen(sym->rev->rev);
+	memcpy(rev, sym->rev->rev, len);
+	if (sym->branch)
+	    rev[len++] = '.';
+    }
+    if (sym->branch)
+	len += sprintf(&rev[len], "%d", sym->branch);
+    rev[len] = 0;
+}
+
+static int revision_affects_revision(const char *rev1, const char *rev2)
+{
+    const char *r1, *r2;
+    int r1v, r2v;
+    int b;
+
+    r1 = strcmp(rev1, "HEAD") ? rev1 : "1";
+    r2 = strcmp(rev2, "HEAD") ? rev2 : "1";
+
+    for (b = 2;; b = !b) {
+	r1v = strtoul(r1, &r1, 10);
+	r2v = strtoul(r2, &r2, 10);
+	if (*r1++ != '.')
+	    return b == 1 ? r1v == r2v : r1v <= r2v;
+	if (r1v != r2v)
+	    return 0;
+	if (*r2++ != '.')
+	    return b && !strchr(r1, '.'); /* branch member is parent of branch */
+    }
+}
+
+static int revision_affects_symbol(CvsFileRevision *rev, const char *sym)
+{
+    char symrev[REV_STR_MAX];
+    Tag *tag = (Tag *)get_hash_object(rev->file->symbols, sym);
+
+    if (!tag)
+	return -1;
+
+    get_sym_revision(symrev, tag);
+    return revision_affects_revision(rev->rev, symrev);
 }
 
 static int count_dots(const char * p)
@@ -2495,21 +2563,16 @@ static void set_psm_initial(PatchSetMember * psm)
  * look at all revisions starting at rev and going forward until 
  * ps->date and see whether they are invalid or just funky.
  */
-static int check_rev_funk(PatchSet * ps, CvsFileRevision * rev)
+static int check_tag_funk(PatchSet * ps, const char *tagname, CvsFileRevision * rev)
 {
-    int retval = TAG_FUNKY;
-
-    struct list_link * tag;
-    for (tag = ps->tags.next; tag != &ps->tags; tag = tag->next)
-    {
-        char* tagname = list_entry (&tag, TagName, link)->name;
+    int retval = 0;
 
     while (rev)
     {
 	PatchSet * next_ps = rev->post_psm->ps;
 	struct list_link * next;
 
-	if (next_ps->date > ps->date)
+	if (next_ps->psid > ps->psid)
 	    break;
 
 	debug(DEBUG_STATUS, "ps->date %d next_ps->date %d rev->rev %s rev->branch %s", 
@@ -2543,9 +2606,9 @@ static int check_rev_funk(PatchSet * ps, CvsFileRevision * rev)
 	for (next = next_ps->members.next; next != &next_ps->members; next = next->next)
 	{
 	    PatchSetMember * psm = list_entry(next, PatchSetMember, link);
-	    if (before_tag(psm->post_rev, tagname))
+	    if (revision_affects_symbol(psm->post_rev, tagname) > 0)
 	    {
-		retval = TAG_INVALID;
+		retval ++;
 		/* only set bad_funk for one of the -r tags */
 		if (next_ps->funk_factor)
 		{
@@ -2564,44 +2627,39 @@ static int check_rev_funk(PatchSet * ps, CvsFileRevision * rev)
 
 	rev = rev_follow_branch(rev, ps->branch);
     }
-    }
-
-    return retval;
-}
-
-/* determine if the revision is before the tag */
-static int before_tag(CvsFileRevision * rev, const char * tag)
-{
-    CvsFileRevision * tagged_rev = (CvsFileRevision*)get_hash_object(rev->file->symbols, tag);
-    int retval = 0;
-
-    if (tagged_rev && 
-	revision_affects_branch(rev, tagged_rev->branch) && 
-	rev->post_psm->ps->date <= tagged_rev->post_psm->ps->date)
-	retval = 1;
-
-    debug(DEBUG_STATUS, "before_tag: %s %s %s %s %d", 
-	  rev->file->filename, tag, rev->rev, tagged_rev ? tagged_rev->rev : "N/A", retval);
 
     return retval;
 }
 
 /* get the next revision from this one following branch if possible */
-/* FIXME: not sure if this needs to follow branches leading up to branches? */
-static CvsFileRevision * rev_follow_branch(CvsFileRevision * rev, const char * branch)
+static CvsFileRevision * rev_follow_branch(CvsFileRevision * rev, const GlobalSymbol * branch)
 {
     struct list_link * next;
+    Tag *sym;
+    char symrev[REV_STR_MAX];
 
     /* check for 'main line of inheritance' */
-    if (strcmp(rev->branch, branch) == 0)
+    if (rev->branch->sym == branch)
 	return rev->pre_psm ? rev->pre_psm->post_rev : NULL;
 
     /* look down branches */
     for (next = rev->branch_children.next; next != &rev->branch_children; next = next->next)
     {
 	CvsFileRevision * next_rev = list_entry(next, CvsFileRevision, link);
-	//debug(DEBUG_STATUS, "SCANNING BRANCH CHILDREN: %s %s", next_rev->branch, branch);
-	if (strcmp(next_rev->branch, branch) == 0)
+	if (next_rev->branch->sym == branch)
+	    return next_rev;
+    }
+
+    /* have to try harder to find an ancestor branch */
+    sym = get_hash_object(rev->file->symbols, branch->tag);
+    if (!sym)
+	return NULL;
+    get_sym_revision(symrev, sym);
+
+    for (next = rev->branch_children.next; next != &rev->branch_children; next = next->next)
+    {
+	CvsFileRevision * next_rev = list_entry(next, CvsFileRevision, link);
+	if (revision_affects_revision(next_rev->rev, symrev))
 	    return next_rev;
     }
     
@@ -2632,7 +2690,7 @@ static void determine_branch_ancestor(PatchSet * ps, PatchSet * head_ps)
 	return;
 
     /* HEAD branch patchsets have no ancestry, but callers should know that */
-    if (strcmp(ps->branch, "HEAD") == 0)
+    if (ps->branch == &head_sym)
     {
 	debug(DEBUG_APPMSG1, "WARNING: no branch ancestry for HEAD");
 	return;
@@ -2667,14 +2725,14 @@ static void determine_branch_ancestor(PatchSet * ps, PatchSet * head_ps)
 	 */
 	if (!head_ps->ancestor_branch)
 	    d1 = -1;
-	else if (strcmp(ps->branch, rev->branch) == 0)
+	else if (ps->branch == rev->branch->sym)
 	    continue;
 	else if (strcmp(head_ps->ancestor_branch, "HEAD") == 0)
 	    d1 = 1;
 	else {
 	    /* branch_rev may not exist if the file was added on this branch for example */
-	    const char * branch_rev = (char *)get_hash_object(rev->file->branches_sym, head_ps->ancestor_branch);
-	    d1 = branch_rev ? count_dots(branch_rev) : 1;
+	    Tag * branch_rev = (Tag *)get_hash_object(rev->file->symbols, head_ps->ancestor_branch);
+	    d1 = branch_rev ? count_dots(branch_rev->rev->rev)+1 : 1;
 	}
 	
 	/* HACK: we sometimes pretend to derive from the import branch.  
@@ -2684,8 +2742,8 @@ static void determine_branch_ancestor(PatchSet * ps, PatchSet * head_ps)
 	
  	debug(DEBUG_STATUS, "%d ancestry %s %s->%s %s", ps->psid, ps->branch, head_ps->ancestor_branch, rev->branch, rev->file->filename);
 
-	if (d2 > d1 && strcmp(rev->branch, "#CVSPS_NO_BRANCH"))
-	    head_ps->ancestor_branch = rev->branch;
+	if (d2 > d1 && rev->branch->sym)
+	    head_ps->ancestor_branch = rev->branch->sym->tag;
     }
 }
 

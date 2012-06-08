@@ -178,7 +178,7 @@ time_t read_cache()
 		    *tag = 0;
 		    tag += 2;
 		    buff[len - 1] = 0;
-		    cvs_file_add_branch(f, buff, tag);
+		    cvs_file_add_symbol(f, buff, tag, -1/*FIXME*/);
 		}
 	    }
 	    else
@@ -198,7 +198,7 @@ time_t read_cache()
 		    *rev = 0;
 		    rev += 2;
 		    buff[len - 1] = 0;
-		    cvs_file_add_symbol(f, rev, buff);
+		    cvs_file_add_symbol(f, rev, buff, 0);
 		}
 	    }
 	    else
@@ -216,7 +216,7 @@ time_t read_cache()
 		    *p++ = 0;
 		    buff[len-1] = 0;
 		    rev = cvs_file_add_revision(f, buff);
-		    if (strcmp(rev->branch, p) != 0)
+		    if (strcmp(rev->branch->sym->tag, p) != 0)
 		    {
 			debug(DEBUG_APPERROR, "branch mismatch for %s:%s %s != %s", 
 			      rev->file->filename, rev->rev, rev->branch, p);
@@ -448,6 +448,7 @@ void write_cache(time_t cache_date)
 
 	fprintf(cache_fp, "file: %s\n", file->filename);
 
+#if 0
 	reset_hash_iterator(file->branches);
 	while ((rev_iter = next_hash_entry(file->branches)))
 	{
@@ -455,6 +456,7 @@ void write_cache(time_t cache_date)
 	    char * tag = (char *)rev_iter->he_obj;
 	    fprintf(cache_fp, "%s: %s\n", rev, tag);
 	}
+#endif
 
 	fprintf(cache_fp, "\n");
 
@@ -502,6 +504,7 @@ static void dump_patch_set(FILE * fp, PatchSet * ps)
     fprintf(fp, "author: %s\n", ps->author);
     {
 	fprintf(fp, "tags:");
+#if 0
 	struct list_link * tag;
 	for (tag = ps->tags.next; tag != &ps->tags; tag = tag->next)
 	{
@@ -510,6 +513,7 @@ static void dump_patch_set(FILE * fp, PatchSet * ps)
 	    fprintf(fp, " %s %d%s", tagname->name, tagname->flags,
 		    (tag->next == &ps->tags) ? "" : ",");
 	}
+#endif
 	fprintf(fp, "\n");
     }
     fprintf(fp, "branch: %s\n", ps->branch);

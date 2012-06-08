@@ -21,14 +21,13 @@ typedef struct _PatchSetRange PatchSetRange;
 typedef struct _CvsFileRevision CvsFileRevision;
 typedef struct _GlobalSymbol GlobalSymbol;
 typedef struct _Tag Tag;
-typedef struct _TagName TagName;
 
 struct _CvsFileRevision
 {
     char * rev;
     int dead;
     CvsFile * file;
-    char * branch;
+    const Tag * branch;
     /*
      * In the cvs cvs repository (ccvs project) there are tagged
      * revisions that don't exist. track 'confirmed' revisions
@@ -44,8 +43,8 @@ struct _CvsFileRevision
      * kept in pre_psm, and all 'branch revisions' are kept
      * in a list.
      */
-    PatchSetMember * pre_psm;
     PatchSetMember * post_psm;
+    PatchSetMember * pre_psm;
     list_head branch_children; /* CvsFileRevision->link */
     
     /* 
@@ -63,9 +62,7 @@ struct _CvsFile
 {
     char *filename;
     struct hash_table * revisions;    /* rev_str to revision [CvsFileRevision*] */
-    struct hash_table * branches;     /* branch to branch_sym [char*]           */
-    struct hash_table * branches_sym; /* branch_sym to branch [char*]           */
-    struct hash_table * symbols;      /* tag to revision [CvsFileRevision*]     */
+    struct hash_table * symbols;      /* tag to revision [Tag*]     */
     /* 
      * this is a hack. when we initially create entries in the symbol hash
      * we don't have the branch info, so the CvsFileRevisions get created 
@@ -113,9 +110,9 @@ struct _PatchSet
     time_t max_date;
     char *descr;
     char *author;
-    list_head tags; /* TagName->link */
-    char *branch;
-    char *ancestor_branch;
+    list_head tags; /* GlobalSymbol->link */
+    const GlobalSymbol *branch;
+    const char *ancestor_branch;
     list_head members; /* PatchSetMember->link */
     /*
      * A 'branch add' patch set is a bogus patch set created automatically
@@ -145,25 +142,21 @@ struct _PatchSetRange
 
 struct _GlobalSymbol
 {
-    char * tag;
+    const char * tag;
     PatchSet * ps;
+    short flags;
     list_head tags; /* Tag->global_link */
+    list_node link; /* PatchSet.tags */
 };
 
 struct _Tag
 {
-    GlobalSymbol * sym;
+    const GlobalSymbol * sym;
     CvsFileRevision * rev;
-    char * tag;
+    short branch;
+    short flags;
     list_node global_link; /* GlobalSymbol.tags */
     list_node rev_link; /* CvsFileRevision.tags */
-};
-
-struct _TagName
-{
-    char * name;
-    int flags;
-    list_node link; /* PatchSet.tags */
 };
 
 #endif /* CVSPS_TYPES_H */

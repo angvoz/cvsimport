@@ -89,8 +89,7 @@ void print_statistics(void * ps_tree)
     /* Statistics data */
     unsigned int num_files = 0, max_file_len = 0, total_file_len = 0;
     unsigned int total_revisions = 0, max_revisions_for_file = 0;
-    unsigned int total_branches = 0, max_branches_for_file = 0;
-    unsigned int total_branches_sym = 0, max_branches_sym_for_file = 0;
+    unsigned int total_symbols = 0, max_symbols_for_file = 0;
 
     /* Other vars */
     struct hash_entry *he;
@@ -110,9 +109,7 @@ void print_statistics(void * ps_tree)
 	total_file_len += len;
 
 	count_hash(file->revisions, &total_revisions, &max_revisions_for_file);
-	count_hash(file->branches, &total_branches, &max_branches_for_file);
-	count_hash(file->branches_sym, &total_branches_sym,
-	    &max_branches_sym_for_file);
+	count_hash(file->symbols, &total_symbols, &max_symbols_for_file);
     }
 
     /* Print file statistics */
@@ -121,10 +118,8 @@ void print_statistics(void * ps_tree)
 
     printf("Max revisions for file: %d, Average revisions for file: %.2f\n",
 	  max_revisions_for_file, (float)total_revisions/num_files);
-    printf("Max branches for file: %d, Average branches for file: %.2f\n",
-	  max_branches_for_file, (float)total_branches/num_files);
-    printf("Max branches_sym for file: %d, Average branches_sym for file: %.2f\n",
-	  max_branches_sym_for_file, (float)total_branches_sym/num_files);
+    printf("Max symbols for file: %d, Average symbols for file: %.2f\n",
+	  max_symbols_for_file, (float)total_symbols/num_files);
 
     /* Gather patchset statistics */
     twalk(ps_tree, stat_ps_tree_node);
