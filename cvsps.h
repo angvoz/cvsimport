@@ -22,12 +22,11 @@ extern char root_path[];
 extern char repository_path[];
 
 CvsFile * create_cvsfile();
-CvsFileRevision * cvs_file_add_revision(CvsFile *, const char *);
+Revision * cvs_file_add_revision(CvsFile *, const char *);
 void cvs_file_add_symbol(CvsFile * file, const char * rev, const char * tag, int branch);
-PatchSet * get_patch_set(const char *, const char *, const char *, const Tag *, PatchSetMember *);
-PatchSetMember * create_patch_set_member();
-CvsFileRevision * file_get_revision(CvsFile *, const char *);
-void patch_set_add_member(PatchSet * ps, PatchSetMember * psm);
+PatchSet * get_patch_set(const char *, const char *, const char *, Revision *);
+Revision * file_get_revision(CvsFile *, const char *);
+void patch_set_add_member(PatchSet * ps, Revision * psm);
 void walk_all_patch_sets(void (*action)(PatchSet *));
 
 #endif /* CVSPS_H */

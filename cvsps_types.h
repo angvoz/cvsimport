@@ -16,41 +16,43 @@
 
 typedef struct _CvsFile CvsFile;
 typedef struct _PatchSet PatchSet;
-typedef struct _PatchSetMember PatchSetMember;
 typedef struct _PatchSetRange PatchSetRange;
-typedef struct _CvsFileRevision CvsFileRevision;
+typedef struct _Revision Revision;
 typedef struct _GlobalSymbol GlobalSymbol;
 typedef struct _Tag Tag;
 
-struct _CvsFileRevision
+struct _Revision
 {
     char * rev;
-    int dead;
     CvsFile * file;
     const Tag * branch;
+    unsigned dead : 1;
     /*
      * In the cvs cvs repository (ccvs project) there are tagged
      * revisions that don't exist. track 'confirmed' revisions
      * so as to not let them screw us up.
      */
-    int present;
+    unsigned present : 1;
+    /*
+     * bad_funk is only set w.r.t the -r tags
+     */
+    unsigned bad_funk : 1;
 
+    PatchSet * ps;
+    list_node ps_link; /* PatchSet.members */
+    
     /*
      * A revision can be part of many PatchSets because it may
-     * be the branch point of many branches (as a pre_rev).  
-     * It should, however, be the 'post_rev' of only one 
-     * PatchSetMember.  The 'main line of inheritence' is
-     * kept in pre_psm, and all 'branch revisions' are kept
+     * be the branch point of many branches (as a prev_rev).  
+     * It should, however, be the 'next_rev' of only one 
+     * Revision.  The 'main line of inheritence' is
+     * kept in next_rev, and all 'branch revisions' are kept
      * in a list.
      */
-    PatchSetMember * post_psm;
-    PatchSetMember * pre_psm;
-    list_head branch_children; /* CvsFileRevision->link */
-    
-    /* 
-     * for linking this 'first branch rev' into the parent branch_children
-     */
-    list_node link; /* CvsFileRevision.branch_children */
+    Revision *prev_rev;
+    Revision *next_rev;
+    list_head branch_children; /* Revision->branch_link */
+    list_node branch_link; /* Revision.branch_children */
 
     /*
      * A list of all Tag structures tagging this revision
@@ -61,27 +63,14 @@ struct _CvsFileRevision
 struct _CvsFile
 {
     char *filename;
-    struct hash_table * revisions;    /* rev_str to revision [CvsFileRevision*] */
+    struct hash_table * revisions;    /* rev_str to revision [Revision*] */
     struct hash_table * symbols;      /* tag to revision [Tag*]     */
     /* 
      * this is a hack. when we initially create entries in the symbol hash
-     * we don't have the branch info, so the CvsFileRevisions get created 
+     * we don't have the branch info, so the Revisions get created 
      * with the branch attribute NULL.  Later we need to resolve these.
      */
     int have_branches;
-};
-
-struct _PatchSetMember
-{
-    CvsFileRevision * pre_rev;
-    CvsFileRevision * post_rev;
-    PatchSet * ps;
-    CvsFile * file;
-    /*
-     * bad_funk is only set w.r.t the -r tags
-     */
-    int bad_funk;
-    list_node link; /* PatchSet.members */
 };
 
 /* 
@@ -97,10 +86,13 @@ struct _PatchSetMember
  * that have an odd relationship to the
  * tag
  */
-#define FNK_SHOW_SOME  1
-#define FNK_SHOW_ALL   2
-#define FNK_HIDE_ALL   3
-#define FNK_HIDE_SOME  4
+enum funk_factor {
+    FNK_NONE = 0,
+    FNK_SHOW_SOME,
+    FNK_SHOW_ALL,
+    FNK_HIDE_ALL,
+    FNK_HIDE_SOME
+};
 
 struct _PatchSet
 {
@@ -113,20 +105,20 @@ struct _PatchSet
     list_head tags; /* GlobalSymbol->link */
     const GlobalSymbol *branch;
     const char *ancestor_branch;
-    list_head members; /* PatchSetMember->link */
+    list_head members; /* Revision->ps_link */
     /*
      * A 'branch add' patch set is a bogus patch set created automatically
      * when a 'file xyz was initially added on branch abc'
      * we want to ignore these.  fortunately, there's a way to detect them
      * without resorting to looking at the log message.
      */
-    int branch_add;
+    unsigned branch_add : 1;
     /*
      * If the '-r' option specifies a funky tag, we will need to detect the
      * PatchSets that come chronologically before the tag, but are logically
      * after, and vice-versa if a second -r option was specified
      */
-    int funk_factor;
+    enum funk_factor funk_factor : 4;
 
     /* for putting onto a list */
     list_node all_link; /* all_patch_sets */
@@ -152,11 +144,11 @@ struct _GlobalSymbol
 struct _Tag
 {
     const GlobalSymbol * sym;
-    CvsFileRevision * rev;
+    Revision * rev;
     short branch;
     short flags;
     list_node global_link; /* GlobalSymbol.tags */
-    list_node rev_link; /* CvsFileRevision.tags */
+    list_node rev_link; /* Revision.tags */
 };
 
 #endif /* CVSPS_TYPES_H */
