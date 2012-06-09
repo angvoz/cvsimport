@@ -27,6 +27,7 @@ struct _Revision
     CvsFile * file;
     const Tag * branch;
     unsigned dead : 1;
+    unsigned branch_add : 1;
     /*
      * In the cvs cvs repository (ccvs project) there are tagged
      * revisions that don't exist. track 'confirmed' revisions
@@ -70,7 +71,7 @@ struct _CvsFile
      * we don't have the branch info, so the Revisions get created 
      * with the branch attribute NULL.  Later we need to resolve these.
      */
-    int have_branches;
+    unsigned have_branches : 1;
 };
 
 /* 
@@ -136,7 +137,7 @@ struct _GlobalSymbol
 {
     const char * tag;
     PatchSet * ps;
-    short flags;
+    unsigned short flags;
     list_head tags; /* Tag->global_link */
     list_node link; /* PatchSet.tags */
 };
@@ -145,8 +146,8 @@ struct _Tag
 {
     const GlobalSymbol * sym;
     Revision * rev;
-    short branch;
-    short flags;
+    unsigned short branch;
+    unsigned short flags;
     list_node global_link; /* GlobalSymbol.tags */
     list_node rev_link; /* Revision.tags */
 };

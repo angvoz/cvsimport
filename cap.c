@@ -12,8 +12,7 @@
 
 #include "cap.h"
 #include "cvs_direct.h"
-
-extern CvsServerCtx * cvs_direct_ctx;
+#include "cvsps.h"
 
 static char client_version[BUFSIZ];
 static char server_version[BUFSIZ];
