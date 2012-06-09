@@ -131,7 +131,7 @@ static Revision * file_get_revision(CvsFile *, const char *);
 static Revision * cvs_file_add_revision(CvsFile *, const char *);
 static void cvs_file_add_symbol(CvsFile * file, const char * rev, const char * tag, int branch);
 static Tag *find_branch_tag(Revision *, int);
-static void assign_patch_set(Revision *, const char *, const char *, const char *);
+static void assign_patch_set(Revision *, time_t, const char *, const char *);
 static void assign_pre_revision(Revision *, Revision * rev);
 static void patch_set_add_member(PatchSet * ps, Revision * psm);
 static void walk_all_patch_sets(void (*action)(PatchSet *));
@@ -247,7 +247,7 @@ static void load_from_cvs()
     int state = NEED_RCS_FILE;
     CvsFile * file = NULL;
     Revision * rev = NULL;
-    char datebuff[20];
+    time_t date;
     char authbuff[AUTH_STR_MAX];
     int logbufflen = LOG_STR_MAX + 1;
     char * logbuff = malloc(logbufflen);
@@ -374,10 +374,12 @@ static void load_from_cvs()
 	case NEED_DATE_AUTHOR_STATE:
 	    if (strncmp(buff, "date:", 5) == 0)
 	    {
+		char datebuff[20];
 		char * p;
 
 		strncpy(datebuff, buff + 6, 19);
 		datebuff[19] = 0;
+		convert_date(&date, datebuff);
 
 		strcpy(authbuff, "unknown");
 		p = strstr(buff, "author: ");
@@ -413,23 +415,24 @@ static void load_from_cvs()
 	    {
 		if (rev) 
 		{
+		    char prev[REV_STR_MAX];
+		    PatchSet *prs;
 		    int leaf;
-		    if (rev->dead && get_branch_ext(NULL, rev->rev, &leaf) && leaf == 1) 
+
+		    if (rev->dead && get_branch_ext(prev, rev->rev, &leaf) && leaf == 1 &&
+			    strncmp(logbuff, "file ", 5) == 0 && strstr(logbuff, " added on branch ") &&
+			    ((!get_branch(prev, prev) || 
+			      ((prs = file_get_revision(file, prev)->ps)->min_date < date && date < prs->max_date))))
 		    {
 			/* 
 			 * We expect a 'file xyz initially added on branch abc' here.
 			 * There can only be several such member in a given patchset,
 			 * since cvs only includes the file basename in the log message.
 			 */
-			if (strncmp(logbuff, "file ", 5) != 0 || !strstr(logbuff, " was added on branch ")) 
-			{
-			    debug(DEBUG_APPERROR, "initial dead %s:%s doesn't look like a branch add", rev->file->filename, rev->rev);
-			    exit(1);
-			}
 			rev->branch_add = 1;
 		    }
 
-		    assign_patch_set(rev, datebuff, logbuff, authbuff);
+		    assign_patch_set(rev, date, logbuff, authbuff);
 		}
 
 		logbuff[0] = 0;
@@ -1141,7 +1144,7 @@ static CvsFile * build_file_by_name(const char * fn)
     return retval;
 }
 
-static void assign_patch_set(Revision *rev, const char * dte, const char * log, const char * author)
+static void assign_patch_set(Revision *rev, time_t dat, const char * log, const char * author)
 {
     PatchSet * retval = NULL, **find = NULL;
 
@@ -1151,7 +1154,7 @@ static void assign_patch_set(Revision *rev, const char * dte, const char * log, 
 	return;
     }
 
-    convert_date(&retval->date, dte);
+    retval->date = dat;
     retval->author = get_string(author);
     retval->descr = xstrdup(log);
     retval->branch = rev->branch ? rev->branch->sym : NULL;
@@ -1201,7 +1204,7 @@ static void assign_patch_set(Revision *rev, const char * dte, const char * log, 
     else
     {
 	debug(DEBUG_STATUS, "new patch set!");
-	debug(DEBUG_STATUS, "%s %s %s", retval->author, retval->descr, dte);
+	debug(DEBUG_STATUS, "%s %s %d", retval->author, retval->descr, dat);
 
 	retval->min_date = retval->date - timestamp_fuzz_factor;
 	retval->max_date = retval->date + timestamp_fuzz_factor;
@@ -2209,7 +2212,7 @@ static void resolve_global_symbols()
 	for (next = sym->tags.next; next != &sym->tags; next = next->next)
 	{
 	    Tag * tag = list_entry(next, Tag, global_link);
-	    Revision * rev = tag->rev;
+	    Revision * rev = tag->rev, *branch_rev = NULL;
 
 	    if (!rev->present)
 	    {
@@ -2222,13 +2225,18 @@ static void resolve_global_symbols()
 		continue;
 	    }
 
-	    if (!ps || rev->ps->psid > ps->psid)
-		ps = rev->ps;
-	    if (tag->branch) {
-		rev = rev_follow_branch(rev, sym);
-		if (rev && (!branch_ps || rev->ps->psid < branch_ps->psid))
-			branch_ps = rev->ps;
+	    if (tag->branch)
+		branch_rev = rev_follow_branch(rev, sym);
+	    if (branch_rev && branch_rev->branch_add)
+	    {
+		rev = NULL;
+		branch_rev = branch_rev->next_rev;
 	    }
+	    if (branch_rev && (!branch_ps || branch_rev->ps->psid < branch_ps->psid))
+		branch_ps = branch_rev->ps;
+
+	    if (rev && (!ps || rev->ps->psid > ps->psid))
+		ps = rev->ps;
 	}
 	
 	sym->ps = ps;
