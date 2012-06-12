@@ -114,6 +114,7 @@ static int compress;
 static char compress_arg[8];
 static int sort_by_branch;
 static int funky_tag_validity;
+static int greedy_unnamed_branches;
 
 static void check_norc(int, char *[]);
 static int parse_args(int, char *[]);
@@ -190,8 +191,6 @@ int main(int argc, char *argv[])
 
     file_hash = create_hash_table(5119);
     global_symbols = create_hash_table(5119);
-
-    put_hash_object_ex(global_symbols, head_sym.name, (void *)&head_sym, HT_NO_KEYCOPY, NULL, NULL);
 
     /* this parses some of the CVS/ files, and initializes
      * the repository_path and other variables 
@@ -472,7 +471,7 @@ static void load_from_cvs()
 
 			if (get_branch_ext(NULL, branch, &bid) && rev)
 			{
-			    if (!find_branch_tag(rev, bid)) 
+			    if (!find_branch_tag(rev, bid))
 			    {
 				debug(DEBUG_APPMSG1, "WARNING: unnamed branch %s:%s", file->filename, branch);
 				cvs_file_add_symbol(file, rev->rev, NULL, bid);
@@ -564,7 +563,7 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "             [--test-log <captured cvs log file>]");
     debug(DEBUG_APPERROR, "             [--no-rlog] [--diff-opts <option string>] [--cvs-direct]");
     debug(DEBUG_APPERROR, "             [--debuglvl <bitmask>] [-Z <compression>] [--root <cvsroot>]");
-    debug(DEBUG_APPERROR, "             [-q] [-B] [-F] [<repository>]");
+    debug(DEBUG_APPERROR, "             [-q] [-B] [-F] [-U] [<repository>]");
     debug(DEBUG_APPERROR, "");
     debug(DEBUG_APPERROR, "Where:");
     debug(DEBUG_APPERROR, "  -h display this informative message");
@@ -596,6 +595,7 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "  -q be quiet about warnings");
     debug(DEBUG_APPERROR, "  -B sort by branching (helps when importing funky branch points)");
     debug(DEBUG_APPERROR, "  -F determine whether funky tags are invalid/inconsistent");
+    debug(DEBUG_APPERROR, "  -U assume unnamed branches are the same");
     debug(DEBUG_APPERROR, "  <repository> apply cvsps to repository.  overrides working directory");
     debug(DEBUG_APPERROR, "\ncvsps version %s\n", VERSION);
 
@@ -882,6 +882,13 @@ static int parse_args(int argc, char *argv[])
 	if (strcmp(argv[i], "-F") == 0)
 	{
 	    funky_tag_validity = 1;
+	    i++;
+	    continue;
+	}
+
+	if (strcmp(argv[i], "-U") == 0)
+	{
+	    greedy_unnamed_branches = 1;
 	    i++;
 	    continue;
 	}
@@ -2145,6 +2152,29 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
      */
     if (tag_str)
 	sym = (GlobalSymbol*)get_hash_object(global_symbols, tag_str);
+    else if (greedy_unnamed_branches)
+    {
+	for (next = unnamed_branches.next; next != &unnamed_branches; next = next->next)
+	{
+	    GlobalSymbol *unsym = list_entry(next, GlobalSymbol, link);
+	    /* determine if unsym conflicts with file */
+	    struct list_link *tagl;
+	    for (tagl = unsym->tags.next; tagl != &unsym->tags; tagl = tagl->next)
+	    {
+		Tag *utag = list_entry(tagl, Tag, global_link);
+		if (utag->rev->file == file)
+		{
+		    unsym = NULL;
+		    break;
+		}
+	    }
+	    if (unsym)
+	    {
+		sym = unsym;
+		break;
+	    }
+	}
+    }
     if (!sym)
     {
 	sym = (GlobalSymbol*)calloc(1, sizeof(*sym));
@@ -2336,10 +2366,10 @@ static void resolve_global_symbols()
 	    {
 		next_rev = rev_follow_symbol(rev, tag);
 		if (next_rev && next_rev->branch_add)
-		    next_rev = next_rev->next_rev;
+		    next_rev = rev_follow_symbol(next_rev, tag);
 		if (next_rev && next_rev->ps->psid <= sym->ps->psid)
 		{
-		    debug(DEBUG_APPMSG1, "WARNING: branch %s started %d before branch point %d", sym->name, next_rev->ps->psid, sym->ps->psid);
+		    debug(DEBUG_APPMSG1, "WARNING: branch %s started %d before branch point %d on file %s", sym->name, next_rev->ps->psid, sym->ps->psid, rev->file->filename);
 		    flag |= TAG_LATE;
 		}
 	    }
@@ -2355,7 +2385,7 @@ static void resolve_global_symbols()
 		while (next_rev && next_rev->prev_rev && !next_rev->prev_rev->dead)
 		    next_rev = next_rev->prev_rev;
 	    if (next_rev && next_rev->branch_add)
-		next_rev = next_rev->next_rev;
+		next_rev = rev_follow_symbol(next_rev, branch);
 	    if (next_rev && patch_set_affects_patch_set(next_rev->ps, sym->ps))
 	    {
 		if (funky_tag_validity && check_tag_funk(sym, branch, next_rev))
@@ -2389,8 +2419,8 @@ static void get_sym_revision(char *rev, Tag *sym)
 
 static int revision_affects_revision(const char *rev1, const char *rev2)
 {
-    const char *r1, *r2;
-    int r1v, r2v;
+    const char *r1 = rev1, *r2 = rev2;
+    unsigned r1v, r2v;
     int b;
 
     for (b = 2;; b = !b) {
