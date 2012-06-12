@@ -73,7 +73,7 @@ static const char * fnk_descr[] = {
     "FNK_HIDE_SOME"
 };
 
-static const GlobalSymbol head_sym = { "HEAD" };
+static const GlobalSymbol head_sym = { "HEAD", .tags = { (struct list_link *)&head_sym.tags, (struct list_link *)&head_sym.tags } };
 static const Tag head_tag = { (/*unconst*/ GlobalSymbol *)&head_sym, NULL, 1 };
 
 /* static globals */
@@ -190,6 +190,8 @@ int main(int argc, char *argv[])
 
     file_hash = create_hash_table(5119);
     global_symbols = create_hash_table(5119);
+
+    put_hash_object_ex(global_symbols, head_sym.name, (void *)&head_sym, HT_NO_KEYCOPY, NULL, NULL);
 
     /* this parses some of the CVS/ files, and initializes
      * the repository_path and other variables 
@@ -1176,6 +1178,13 @@ static void merge_symbols(GlobalSymbol *sym, GlobalSymbol *old)
     }
     list_splice(&old->tags, &sym->tags);
     list_del(&old->link);
+    /* slow, but this shouldn't happen too often: */
+    for (next = all_patch_sets.next; next != &all_patch_sets; next = next->next) 
+    {
+	PatchSet *ps = list_entry(next, PatchSet, all_link);
+	if (ps->branch == old)
+	    ps->branch = sym;
+    }
 
     free(old);
 }
@@ -2018,7 +2027,7 @@ static CvsFile * create_cvsfile()
     }
 
     /* for convenience */
-    put_hash_object_ex(f->symbols, "HEAD", (void *)&head_tag, HT_NO_KEYCOPY, NULL, NULL);
+    put_hash_object_ex(f->symbols, head_sym.name, (void *)&head_tag, HT_NO_KEYCOPY, NULL, NULL);
    
     return f;
 }
@@ -2383,9 +2392,6 @@ static int revision_affects_revision(const char *rev1, const char *rev2)
     const char *r1, *r2;
     int r1v, r2v;
     int b;
-
-    r1 = strcmp(rev1, "HEAD") ? rev1 : "1";
-    r2 = strcmp(rev2, "HEAD") ? rev2 : "1";
 
     for (b = 2;; b = !b) {
 	r1v = strtoul(r1, (char **)&r1, 10);
