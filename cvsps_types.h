@@ -25,7 +25,7 @@ struct _Revision
 {
     char * rev;
     CvsFile * file;
-    const Tag * branch;
+    Tag * branch;
     unsigned dead : 1;
     unsigned branch_add : 1;
     /*
@@ -79,8 +79,10 @@ struct _CvsFile
  * they apply to any patchset that
  * has an assoctiated tag
  */
-#define TAG_FUNKY   0x1
+#define TAG_SPLIT   0x1
 #define TAG_INVALID 0x2
+#define TAG_FUNKY   0x4
+#define TAG_LATE    0x8
 
 /* values for funk_factor. they apply
  * only to the -r tags, to patchsets
@@ -104,8 +106,7 @@ struct _PatchSet
     char *descr;
     char *author;
     list_head tags; /* GlobalSymbol->link */
-    const GlobalSymbol *branch;
-    const char *ancestor_branch;
+    GlobalSymbol *branch;
     list_head members; /* Revision->ps_link */
     /*
      * A 'branch add' patch set is a bogus patch set created automatically
@@ -135,19 +136,22 @@ struct _PatchSetRange
 
 struct _GlobalSymbol
 {
-    const char * tag;
+    const char * name;
     PatchSet * ps;
-    unsigned short flags;
+    unsigned flags : 4;
+    unsigned branch : 1;
+    unsigned short depth; /* 0 means (on) trunk */
     list_head tags; /* Tag->global_link */
-    list_node link; /* PatchSet.tags */
+    list_node link; /* PatchSet.tags or unnamed_branches */
 };
 
 struct _Tag
 {
-    const GlobalSymbol * sym;
+    GlobalSymbol * sym;
     Revision * rev;
     unsigned short branch;
-    unsigned short flags;
+    unsigned flags : 4;
+    unsigned dead_init : 1; /* tag points (or should point) to before file existed */
     list_node global_link; /* GlobalSymbol.tags */
     list_node rev_link; /* Revision.tags */
 };

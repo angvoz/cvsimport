@@ -10,7 +10,7 @@
 void list_sort(list_head * list, int (*node_compare)(list_node *, list_node *))
 {
     struct list_link *p, *q, *t;
-    struct list_link tmp;
+    list_head tmp;
     int merges = 0;
     int k = 1;
     int psize, qsize; 
@@ -60,7 +60,7 @@ void list_sort(list_head * list, int (*node_compare)(list_node *, list_node *))
 		
 		list_del(t);
 		
-		list_add(t, tmp.prev);
+		list_ins(t, &tmp);
 	    }
 
 	    p = q;
