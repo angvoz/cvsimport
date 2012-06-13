@@ -9,7 +9,7 @@ fi
 
 cd CVS/$module
 if [[ $# -eq 0 ]] ; then
-	set -- $(git for-each-ref --shell --format '%(refname)' refs/heads/\*)
+	eval set -- $(git for-each-ref --shell --format '%(refname)' refs/heads/\*)
 fi
 
 for ref in "$@" ; do
@@ -18,7 +18,7 @@ for ref in "$@" ; do
 		rev=HEAD
 	fi
 	echo "Comparing $ref:"
-	git checkout -q -f --detach $ref
+	git checkout -q -f $ref
 	git read-tree --empty
 	git clean -f -d -q
 	( cd $top/CVS && cvs -Q export -kk -r $rev $module )
