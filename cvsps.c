@@ -2481,12 +2481,12 @@ static int is_vendor_branch(const char * rev)
 
 static int patch_set_affects_patch_set(PatchSet *ps1, PatchSet *ps)
 {
-    if (ps1->psid > ps->psid)
+    if (ps1->psid > ps->psid) /* optimization */
 	return 0;
 
     do
 	if (ps1->branch == ps->branch)
-	    return 1;
+	    return ps1->psid <= ps->psid;
     while ((ps = ps->branch->ps));
 
     return 0;
