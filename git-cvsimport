@@ -28,9 +28,9 @@ use POSIX qw(strftime dup2 ENOENT);
 use IPC::Open2;
 
 $SIG{'PIPE'}="IGNORE";
-$ENV{'TZ'}="UTC";
+#$ENV{'TZ'}="UTC";
 
-our ($opt_h,$opt_o,$opt_v,$opt_k,$opt_u,$opt_d,$opt_p,$opt_C,$opt_z,$opt_i,$opt_P, $opt_s,$opt_m,@opt_M,$opt_A,$opt_S,$opt_L, $opt_a, $opt_r, $opt_R, $opt_T);
+our ($opt_h,$opt_o,$opt_v,$opt_k,$opt_u,$opt_d,$opt_p,$opt_C,$opt_z,$opt_i,$opt_P, $opt_s,$opt_m,@opt_M,$opt_A,$opt_S,$opt_L, $opt_a, $opt_r, $opt_R, $opt_t);
 my (%conv_author_name, %conv_author_email);
 
 sub usage(;$) {
@@ -41,7 +41,7 @@ Usage: git cvsimport     # fetch/update GIT from CVS
        [-o branch-for-HEAD] [-h] [-v] [-d CVSROOT] [-A author-conv-file]
        [-p opts-for-cvsps] [-P file] [-C GIT_repository] [-z fuzz] [-i] [-k]
        [-u] [-s subst] [-a] [-m] [-M regex] [-S regex] [-L commitlimit]
-       [-r remote] [-R] [-T] [CVS_module]
+       [-r remote] [-R] [-t tag-prefix] CVS_module]
 END
 	exit(1);
 }
@@ -128,7 +128,7 @@ sub read_repo_config {
 	}
 }
 
-my $opts = "haivmkuo:d:p:r:C:z:s:M:P:A:S:L:RT";
+my $opts = "haivmkuo:d:p:r:C:z:s:M:P:A:S:L:Rt:";
 read_repo_config($opts);
 Getopt::Long::Configure( 'no_ignore_case', 'bundling' );
 
@@ -577,14 +577,6 @@ package main;
 my $cvs = CVSconn->new($opt_d, $cvs_tree);
 
 
-sub pdate($) {
-	my ($d) = @_;
-	m#(\d{2,4})/(\d\d)/(\d\d)\s(\d\d):(\d\d)(?::(\d\d))?#
-		or die "Unparseable date: $d\n";
-	my $y=$1; $y-=1900 if $y>1900;
-	return timegm($6||0,$5,$4,$3,$2-1,$y);
-}
-
 sub pmode($) {
 	my ($mode) = @_;
 	my $m = 0;
@@ -732,7 +724,7 @@ unless ($opt_P) {
 		unless (defined($opt_p) && $opt_p =~ m/--no-cvs-direct/) {
 			push @opt, '--cvs-direct';
 		}
-		exec("cvsps","--norc",@opt,"-u","-A",'--root',$opt_d,$cvs_tree);
+		exec("cvsps","--norc",@opt,"-B",'-D','%s','--root',$opt_d,$cvs_tree);
 		die "Could not start cvsps: $!\n";
 	}
 	($cvspsfh, $cvspsfile) = tempfile('gitXXXXXX', SUFFIX => '.cvsps',
@@ -755,13 +747,12 @@ open(CVS, "<$cvspsfile") or die $!;
 #Date: 1999/09/18 13:03:59
 #Author: wkoch
 #Branch: STABLE-BRANCH-1-0
-#Ancestor branch: HEAD
-#Tags: TAG1 , TAG2
 #Log:
 #    See ChangeLog: Sat Sep 18 13:03:28 CEST 1999  Werner Koch
 #Members:
 #	README:1.57->1.57.2.1
 #	VERSION:1.96->1.96.2.1
+#Tag: TAG1
 #
 #---------------------
 
@@ -795,231 +786,49 @@ sub write_tree () {
 	return $tree;
 }
 
-my ($patchset,$date,$author_name,$author_email,$branch,$ancestor,@tags,$logmsg);
+sub symbol_name($) {
+	local $_ = shift;
+	return $opt_o if $_ eq "HEAD";
+	tr/_/\./ if ( $opt_u );
+	s:/:$opt_s:g;
+	$_
+}
+
+my ($patchset,$date,$author_name,$author_email,$branch,$logmsg,$commit_id,$tag,$tagfixup);
 my (@old,@new,@skipped,%ignorebranch,@commit_revisions);
+my (@commit_ids);
 
-# commits that cvsps cannot place anywhere...
-$ignorebranch{'#CVSPS_NO_BRANCH'} = 1;
-
-sub commit {
-	if ($branch eq $opt_o && !$index{branch} &&
-		!get_headref("$remote/$branch")) {
-	    # looks like an initial commit
-	    # use the index primed by git init
-	    $ENV{GIT_INDEX_FILE} = "$git_dir/index";
-	    $index{$branch} = "$git_dir/index";
+sub update_file($$$;$$) {
+	my ($fn, $init, $rev, $dead, $ps) = @_;
+	$fn =~ s#^/+##;
+	if ($opt_S && $fn =~ m/$opt_S/) {
+	    print "SKIPPING $fn v $rev\n";
+	    push(@skipped, $fn);
+	    return;
+	}
+	push @commit_revisions, [$fn, $rev];
+	if ($dead) {
+		push(@old,$fn);
+		print "Delete $fn\n" if $opt_v;
+	} elsif (defined $ps && $ps > 0 && exists $commit_ids[$ps]) {
+		my $pid = open(my $F, '-|');
+		die $! unless defined $pid;
+		if (!$pid) {
+			exec("git", "ls-tree", $commit_ids[$ps], $fn)
+				or die "Cannot get object: $!\n";
+		}
+		local $_ = <$F>;
+		close $F;
+		unless (defined and $? == 0) {
+			print "Failed to get object for $ps:$fn; falling back to CVS\n";
+			return update_file($fn, $init, $rev, $dead);
+		}
+		chomp;
+		my ($mode, $type, $sha, $file) = split;
+		die "Object $ps:$fn $type, not blob" unless $type eq 'blob';
+		$mode = oct($mode) & 0777;
+		push(@new, [$mode, $sha, $fn]);
 	} else {
-	    # use an index per branch to speed up
-	    # imports of projects with many branches
-	    unless ($index{$branch}) {
-		$index{$branch} = tmpnam();
-		$ENV{GIT_INDEX_FILE} = $index{$branch};
-		if ($ancestor) {
-		    system("git", "read-tree", "$remote/$ancestor");
-		} else {
-		    system("git", "read-tree", "$remote/$branch");
-		}
-		die "read-tree failed: $?\n" if $?;
-	    }
-	}
-        $ENV{GIT_INDEX_FILE} = $index{$branch};
-
-	update_index(@old, @new);
-	@old = @new = ();
-	my $tree = write_tree();
-	my $parent = get_headref("$remote/$last_branch");
-	print "Parent ID " . ($parent ? $parent : "(empty)") . "\n" if $opt_v;
-
-	my @commit_args;
-	push @commit_args, ("-p", $parent) if $parent;
-
-	# loose detection of merges
-	# based on the commit msg
-	foreach my $rx (@mergerx) {
-		next unless $logmsg =~ $rx && $1;
-		my $mparent = $1 eq 'HEAD' ? $opt_o : $1;
-		if (my $sha1 = get_headref("$remote/$mparent") // get_headref("tags/$mparent")) {
-			push @commit_args, '-p', $sha1;
-			print "Merge parent branch: $mparent\n" if $opt_v;
-		} else {
-			print "Unknown merge parent: $mparent\n" if $opt_v;
-		}
-	}
-
-	my $commit_date = strftime("+0000 %Y-%m-%d %H:%M:%S",gmtime($date));
-	$ENV{GIT_AUTHOR_NAME} = $author_name;
-	$ENV{GIT_AUTHOR_EMAIL} = $author_email;
-	$ENV{GIT_AUTHOR_DATE} = $commit_date;
-	$ENV{GIT_COMMITTER_NAME} = $author_name;
-	$ENV{GIT_COMMITTER_EMAIL} = $author_email;
-	$ENV{GIT_COMMITTER_DATE} = $commit_date;
-	my $pid = open2(my $commit_read, my $commit_write,
-		'git', 'commit-tree', $tree, @commit_args);
-
-	# compatibility with git2cvs
-	substr($logmsg,32767) = "" if length($logmsg) > 32767;
-	$logmsg =~ s/[\s\n]+\z//;
-
-	if (@skipped) {
-	    $logmsg .= "\n\n\nSKIPPED:\n\t";
-	    $logmsg .= join("\n\t", @skipped) . "\n";
-	    @skipped = ();
-	}
-
-	print($commit_write "$logmsg\n") && close($commit_write)
-		or die "Error writing to git commit-tree: $!\n";
-
-	print "Committed patch $patchset ($branch $commit_date)\n" if $opt_v;
-	chomp(my $cid = <$commit_read>);
-	is_sha1($cid) or die "Cannot get commit id ($cid): $!\n";
-	print "Commit ID $cid\n" if $opt_v;
-	close($commit_read);
-
-	waitpid($pid,0);
-	die "Error running git commit-tree: $?\n" if $?;
-
-	system('git' , 'update-ref', "$remote/$branch", $cid) == 0
-		or die "Cannot write branch $branch for update: $!\n";
-
-	if ($revision_map) {
-		print $revision_map "@$_ $cid\n" for @commit_revisions;
-	}
-	@commit_revisions = ();
-
-	for my $xtag (@tags) {
-		if ($xtag =~ /\s+\*\*.*$/) {
-			# check for **INVALID** and **FUNKY**
-			next if $opt_T;
-			s///;
-		}
-		$xtag =~ tr/_/\./ if ( $opt_u );
-		$xtag =~ s/[\/]/$opt_s/g;
-		$xtag =~ s/\[//g;
-
-		system('git' , 'tag', '-f', $xtag, $cid) == 0
-			or die "Cannot create tag $xtag: $!\n";
-
-		print "Created tag '$xtag' on '$branch'\n" if $opt_v;
-	}
-};
-
-my $commitcount = 1;
-while (<CVS>) {
-	chomp;
-	if ($state == 0 and /^-+$/) {
-		$state = 1;
-	} elsif ($state == 0) {
-		$state = 1;
-		redo;
-	} elsif (($state==0 or $state==1) and s/^PatchSet\s+//) {
-		$patchset = 0+$_;
-		$state=2;
-	} elsif ($state == 2 and s/^Date:\s+//) {
-		$date = pdate($_);
-		unless ($date) {
-			print STDERR "Could not parse date: $_\n";
-			$state=0;
-			next;
-		}
-		$state=3;
-	} elsif ($state == 3 and s/^Author:\s+//) {
-		s/\s+$//;
-		if (/^(.*?)\s+<(.*)>/) {
-		    ($author_name, $author_email) = ($1, $2);
-		} elsif ($conv_author_name{$_}) {
-			$author_name = $conv_author_name{$_};
-			$author_email = $conv_author_email{$_};
-		} else {
-		    $author_name = $author_email = $_;
-		}
-		$state = 4;
-	} elsif ($state == 4 and s/^Branch:\s+//) {
-		s/\s+$//;
-		tr/_/\./ if ( $opt_u );
-		s/[\/]/$opt_s/g;
-		$branch = $_;
-		$state = 5;
-	} elsif ($state == 5 and s/^Ancestor branch:\s+//) {
-		s/\s+$//;
-		$ancestor = $_;
-		$ancestor = $opt_o if $ancestor eq "HEAD";
-		$state = 6;
-	} elsif ($state == 5) {
-		$ancestor = undef;
-		$state = 6;
-		redo;
-	} elsif ($state == 6 and s/^Tags:\s*//) {
-		s/\s+$//;
-		@tags = split /\s*,\s+/, $_;
-		$state = 7;
-	} elsif ($state == 7 and /^Log:/) {
-		$logmsg = "";
-		$state = 8;
-	} elsif ($state == 8 and /^Members:/) {
-		$branch = $opt_o if $branch eq "HEAD";
-		if (defined $branch_date{$branch} and $branch_date{$branch} >= $date) {
-			# skip
-			print "skip patchset $patchset: $date before $branch_date{$branch}\n" if $opt_v;
-			$state = 11;
-			next;
-		}
-		if (!$opt_a && $starttime - 300 - (defined $opt_z ? $opt_z : 300) <= $date) {
-			# skip if the commit is too recent
-			# given that the cvsps default fuzz is 300s, we give ourselves another
-			# 300s just in case -- this also prevents skipping commits
-			# due to server clock drift
-			print "skip patchset $patchset: $date too recent\n" if $opt_v;
-			$state = 11;
-			next;
-		}
-		if (exists $ignorebranch{$branch}) {
-			print STDERR "Skipping $branch\n";
-			$state = 11;
-			next;
-		}
-		if ($ancestor) {
-			if ($ancestor eq $branch) {
-				print STDERR "Branch $branch erroneously stems from itself -- changed ancestor to $opt_o\n";
-				$ancestor = $opt_o;
-			}
-			if (defined get_headref("$remote/$branch")) {
-				print STDERR "Branch $branch already exists!\n";
-				$state=11;
-				next;
-			}
-			my $id = get_headref("$remote/$ancestor");
-			if (!$id) {
-				print STDERR "Branch $ancestor does not exist!\n";
-				$ignorebranch{$branch} = 1;
-				$state=11;
-				next;
-			}
-
-			system(qw(git update-ref -m cvsimport),
-				"$remote/$branch", $id);
-			if($? != 0) {
-				print STDERR "Could not create branch $branch\n";
-				$ignorebranch{$branch} = 1;
-				$state=11;
-				next;
-			}
-		}
-		$last_branch = $branch if $branch ne $last_branch;
-		$state = 9;
-	} elsif ($state == 8) {
-		$logmsg .= "$_\n";
-	} elsif ($state == 9 and /^\s+(.+?):(INITIAL|\d+(?:\.\d+)+)->(\d+(?:\.\d+)+)\s*$/) {
-#	VERSION:1.96->1.96.2.1
-		my $init = ($2 eq "INITIAL");
-		my $fn = $1;
-		my $rev = $3;
-		$fn =~ s#^/+##;
-		if ($opt_S && $fn =~ m/$opt_S/) {
-		    print "SKIPPING $fn v $rev\n";
-		    push(@skipped, $fn);
-		    next;
-		}
-		push @commit_revisions, [$fn, $rev];
 		print "Fetching $fn   v $rev\n" if $opt_v;
 		my ($tmpname, $size) = $cvs->file($fn,$rev);
 		if ($size == -1) {
@@ -1040,34 +849,196 @@ while (<CVS>) {
 			push(@new,[$mode, $sha, $fn]); # may be resurrected!
 		}
 		unlink($tmpname);
-	} elsif ($state == 9 and /^\s+(.+?):\d+(?:\.\d+)+->(\d+(?:\.\d+)+)\(DEAD\)\s*$/) {
-		my $fn = $1;
-		my $rev = $2;
-		$fn =~ s#^/+##;
-		push @commit_revisions, [$fn, $rev];
-		push(@old,$fn);
-		print "Delete $fn\n" if $opt_v;
-	} elsif ($state == 9 and /^\s*$/) {
-		$state = 10;
-	} elsif (($state == 9 or $state == 10) and /^-+$/) {
+	}
+}
+
+sub commit($) {
+	my ($ref) = @_;
+	update_index(@old, @new);
+	@old = @new = ();
+	my $tree = write_tree();
+	my $parent = get_headref($ref);
+	print "Parent ID " . ($parent ? $parent : "(empty)") . "\n" if $opt_v;
+
+	my @commit_args;
+	push @commit_args, ("-p", $parent) if $parent;
+
+	# loose detection of merges
+	# based on the commit msg
+	foreach my $rx (@mergerx) {
+		next unless $logmsg =~ $rx && $1;
+		my $mparent = symbol_name($1);
+		if (my $sha1 = get_headref("$remote/$mparent") // get_headref("refs/tags/$opt_t$mparent")) {
+			push @commit_args, '-p', $sha1;
+			print "Merge parent branch: $mparent\n" if $opt_v;
+		} else {
+			print "Unknown merge parent: $mparent\n" if $opt_v;
+		}
+	}
+
+	my $commit_date = strftime('%z %Y-%m-%d %H:%M:%S',localtime($date));
+	$ENV{GIT_AUTHOR_NAME} = $author_name;
+	$ENV{GIT_AUTHOR_EMAIL} = $author_email;
+	$ENV{GIT_AUTHOR_DATE} = $commit_date;
+	$ENV{GIT_COMMITTER_NAME} = $author_name;
+	$ENV{GIT_COMMITTER_EMAIL} = $author_email;
+	$ENV{GIT_COMMITTER_DATE} = $commit_date;
+	my $pid = open2(my $commit_read, my $commit_write,
+		'git', 'commit-tree', $tree, @commit_args);
+
+	# compatibility with git2cvs
+	#substr($logmsg,32767) = "" if length($logmsg) > 32767;
+	$logmsg =~ s/[\s\n]*\z/\n/;
+
+	if (@skipped) {
+	    $logmsg .= "\n\nSKIPPED:\n\t";
+	    $logmsg .= join("\n\t", @skipped) . "\n";
+	    @skipped = ();
+	}
+
+	print($commit_write $logmsg) && close($commit_write)
+		or die "Error writing to git commit-tree: $!\n";
+
+	print "Committed patch $patchset ($ref $commit_date)\n" if $opt_v;
+	chomp(my $cid = <$commit_read>);
+	is_sha1($cid) or die "Cannot get commit id ($cid): $!\n";
+	print "Commit ID $cid\n" if $opt_v;
+	close($commit_read);
+
+	waitpid($pid,0);
+	die "Error running git commit-tree: $?\n" if $?;
+
+	system('git' , 'update-ref', $ref, $cid) == 0
+		or die "Cannot write branch $ref for update: $!\n";
+
+	if ($revision_map) {
+		print $revision_map "@$_ $cid\n" for @commit_revisions;
+	}
+	@commit_revisions = ();
+
+	$cid
+};
+
+my $commitcount = 1;
+while (<CVS>) {
+	my $chomped = chomp;
+	if ($state == 0 and /^-+$/) {
+		$state = 1;
+	} elsif ($state == 0) {
+		$state = 1;
+		redo;
+	} elsif (($state==0 or $state==1) and s/^PatchSet\s+//) {
+		$patchset = 0+$_;
+		$state=2;
+	} elsif ($state == 2 and s/^Date:\s+//) {
+		$date = 0+$_;
+		unless ($date) {
+			print STDERR "Could not parse date: $_\n";
+			$state=11;
+			next;
+		}
+		$state=3;
+	} elsif ($state == 3 and s/^Author:\s+//) {
+		s/\s+$//;
+		if (/^(.*?)\s+<(.*)>/) {
+		    ($author_name, $author_email) = ($1, $2);
+		} elsif ($conv_author_name{$_}) {
+			$author_name = $conv_author_name{$_};
+			$author_email = $conv_author_email{$_};
+		} else {
+		    $author_name = $author_email = $_;
+		}
+		$state = 4;
+	} elsif ($state == 4 and s/^Branch:\s+//) {
+		s/\s+$//;
+		$branch = symbol_name($_);
+		$state = 7;
+	} elsif ($state == 7 and /^Log:$/) {
+		$logmsg = "";
+		$state = 8;
+	} elsif ($state == 8 and /^Members: $/) {
+		if (defined $branch_date{$branch} and $branch_date{$branch} >= $date) {
+			# skip
+			print "skip patchset $patchset: $date before $branch_date{$branch}\n" if $opt_v;
+			$state = 11;
+			next;
+		}
+		if (!$opt_a && $starttime - 300 - (defined $opt_z ? $opt_z : 300) <= $date) {
+			# skip if the commit is too recent
+			# given that the cvsps default fuzz is 300s, we give ourselves another
+			# 300s just in case -- this also prevents skipping commits
+			# due to server clock drift
+			print "skip patchset $patchset: $date too recent\n" if $opt_v;
+			$state = 11;
+			next;
+		}
+		if (exists $ignorebranch{$branch}) {
+			print STDERR "Skipping $branch\n" unless $ignorebranch{$branch}++;
+			$state = 11;
+			next;
+		}
+		if ($branch ne $last_branch) {
+			system(qw(git update-ref -m cvsimport),
+				"$remote/$branch", "refs/tags/$opt_t$branch", "");
+			if($? != 0) {
+				print STDERR "Could not create branch $branch\n";
+				$ignorebranch{$branch} = 0;
+				$state=11;
+				next;
+			}
+			system("git", "read-tree", "$remote/$branch") == 0
+				or die "Branch switch to $branch failed: $?\n";
+			$last_branch = $branch;
+		}
+		$state = 9;
+	} elsif ($state == 8) {
+		$logmsg .= $_;
+		$logmsg .= "\n" if $chomped;
+	} elsif ($state == 9 and /^\s+(.+?):(INITIAL|\d+(?:\.\d+)+)->(\d+(?:\.\d+)+)(\(DEAD\))?\s*$/) {
+#	VERSION:1.96->1.96.2.1
+		update_file($1, $2 eq "INITIAL", $3, $4);
+	} elsif ($state == 9) {
 		$commitcount++;
 		if ($opt_L && $commitcount > $opt_L) {
 			last;
 		}
-		commit();
+		$commit_ids[$patchset] = $commit_id = commit("$remote/$branch");
 		if (($commitcount & 1023) == 0) {
 			system(qw(git repack -a -d));
 		}
-		$state = 1;
-	} elsif ($state == 11 and /^-+$/) {
-		$state = 1;
-	} elsif (/^-+$/) { # end of unknown-line processing
+		$logmsg = "";
+		$state = 5;
+		redo;
+	} elsif ($state == 5 and s/^Tag:\s+//) {
+		my ($funk) = /(?:\s+\*\*(.*)\*\*)?\s*$/;
+		s///;
+		$tag = symbol_name($_);
+		$tagfixup = 0;
+		system('git' , 'tag', '-f', "$opt_t$tag", $commit_id) == 0
+			or die "Cannot create tag $tag: $!\n";
+		print "Created tag '$tag' on '$branch'\n" if $opt_v;
+		$state = 6;
+	} elsif ($state == 6 and /^\s+(.+?):(\d+(?:\.\d+)+)(\(DEAD\))?(?:#(-?\d+))?$/) {
+		update_file($1, undef, $2, $3, $4);
+		$tagfixup ++;
+	} elsif ($state == 6) {
+		$logmsg = "CVSPS_FIXUP_FUNK $tag";
+		$author_name = "git-cvsimport";
+		$author_email = "cvsps";
+		@commit_revisions = ();
+		commit("refs/tags/$opt_t$tag");
+		system("git", "read-tree", "$remote/$branch");
+		$state = 5;
+		redo;
+	} elsif ($state == 5 and /^\s*$/) {
+		$state = 10;
+	} elsif (/^-+$/) {
 		$state = 1;
 	} elsif ($state != 11) { # ignore stuff when skipping
 		print STDERR "* UNKNOWN LINE * $_\n";
 	}
 }
-commit() if $branch and $state != 11;
+commit("$remote/$branch") if $branch and $state == 9;
 
 unless ($opt_P) {
 	unlink($cvspsfile);

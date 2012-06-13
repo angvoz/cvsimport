@@ -115,6 +115,7 @@ static char compress_arg[8];
 static int sort_by_branch;
 static int funky_tag_validity;
 static int greedy_unnamed_branches;
+static char date_fmt[64] = "%c";
 
 static void check_norc(int, char *[]);
 static int parse_args(int, char *[]);
@@ -563,7 +564,7 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "             [--test-log <captured cvs log file>]");
     debug(DEBUG_APPERROR, "             [--no-rlog] [--diff-opts <option string>] [--cvs-direct]");
     debug(DEBUG_APPERROR, "             [--debuglvl <bitmask>] [-Z <compression>] [--root <cvsroot>]");
-    debug(DEBUG_APPERROR, "             [-q] [-B] [-F] [-U] [<repository>]");
+    debug(DEBUG_APPERROR, "             [-q] [-B] [-F] [-U] [-D <datefmt>] [<repository>]");
     debug(DEBUG_APPERROR, "");
     debug(DEBUG_APPERROR, "Where:");
     debug(DEBUG_APPERROR, "  -h display this informative message");
@@ -596,6 +597,7 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "  -B sort by branching (helps when importing funky branch points)");
     debug(DEBUG_APPERROR, "  -F determine whether funky tags are invalid/inconsistent");
     debug(DEBUG_APPERROR, "  -U assume unnamed branches are the same");
+    debug(DEBUG_APPERROR, "  -D <datefmt> print dates according to the strftime datefmt [%c]");
     debug(DEBUG_APPERROR, "  <repository> apply cvsps to repository.  overrides working directory");
     debug(DEBUG_APPERROR, "\ncvsps version %s\n", VERSION);
 
@@ -890,6 +892,15 @@ static int parse_args(int argc, char *argv[])
 	{
 	    greedy_unnamed_branches = 1;
 	    i++;
+	    continue;
+	}
+
+	if (strcmp(argv[i], "-D") == 0)
+	{
+	    if (++i >= argc)
+		return usage("argument to -D missing", "");
+
+	    strncpy(date_fmt, argv[i++], sizeof(date_fmt)-1);
 	    continue;
 	}
 
@@ -1470,37 +1481,21 @@ static void check_print_patch_set(PatchSet * ps)
 
 static void print_patch_set(PatchSet * ps)
 {
-    struct tm *tm;
+    char datestr[64];
     struct list_link * next;
     const char * funk = "";
 
-    tm = localtime(&ps->date);
+    if (!strftime(datestr, sizeof(datestr), date_fmt, localtime(&ps->date)))
+	*datestr = 0;
     
     funk = fnk_descr[ps->funk_factor];
     
     /* this '---...' is different from the 28 hyphens that separate cvs log output */
     printf("---------------------\n");
     printf("PatchSet %d %s\n", ps->psid, funk);
-    printf("Date: %d/%02d/%02d %02d:%02d:%02d\n", 
-	   1900 + tm->tm_year, tm->tm_mon + 1, tm->tm_mday, 
-	   tm->tm_hour, tm->tm_min, tm->tm_sec);
+    printf("Date: %s\n", datestr);
     printf("Author: %s\n", ps->author);
     printf("Branch: %s\n", ps->branch->name);
-    for (next = ps->tags.next; next != &ps->tags; next = next->next)
-    {
-	GlobalSymbol *sym = list_entry (next, GlobalSymbol, link);
-	printf("Tag: %s %s\n", sym->name, tag_flag_descr[ffs(sym->flags)]);
-	if (sym->flags & ~TAG_LATE)
-	{
-	    struct list_link *tagl;
-	    for (tagl = sym->tags.next; tagl != &sym->tags; tagl = tagl->next)
-	    {
-		Tag *tag = list_entry (tagl, Tag, global_link);
-		if (tag->flags & ~TAG_LATE)
-		    printf("\t%s:%s\n", tag->rev->file->filename, tag->rev->rev);
-	    }
-	}
-    }
     printf("Log:\n%s\n", ps->descr);
     printf("Members: \n");
 
@@ -1520,6 +1515,22 @@ static void print_patch_set(PatchSet * ps)
 	       psm->rev, 
 	       psm->dead ? "(DEAD)": "",
 	       funk);
+    }
+
+    for (next = ps->tags.next; next != &ps->tags; next = next->next)
+    {
+	GlobalSymbol *sym = list_entry (next, GlobalSymbol, link);
+	printf("Tag: %s %s\n", sym->name, tag_flag_descr[ffs(sym->flags)]);
+	if (sym->flags & ~TAG_LATE)
+	{
+	    struct list_link *tagl;
+	    for (tagl = sym->tags.next; tagl != &sym->tags; tagl = tagl->next)
+	    {
+		Tag *tag = list_entry (tagl, Tag, global_link);
+		if (tag->flags & ~TAG_LATE)
+		    printf("\t%s:%s%s#%d\n", tag->rev->file->filename, tag->rev->rev, tag->rev->dead ? "(DEAD)" : "", tag->rev->ps->psid);
+	    }
+	}
     }
     
     printf("\n");

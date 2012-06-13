@@ -2,6 +2,7 @@
 module=$1 ; shift
 dir=`dirname $0`
 PATH=`realpath $dir`:$PATH
+export TZ=America/Los_Angeles
 #export TMPDIR=$PWD
 if [[ -z $module ]] ; then
 	echo "Usage: $0 MODULE [ARGS]"
@@ -17,4 +18,7 @@ else
 	echo "Importing $module..."
 	initial=1
 fi
-git-cvsimport -v -C $module -r cvs -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R -T "$@" $module >> $module.log
+if [[ -f $module.opts ]] ; then
+	set -- `< $module.opts` "$@"
+fi
+git-cvsimport -v -C $module -r cvs -t cvs -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R "$@" $module >> $module.log 2>&1
