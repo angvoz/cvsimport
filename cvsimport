@@ -21,4 +21,4 @@ fi
 if [[ -f $module.opts ]] ; then
 	set -- `< $module.opts` "$@"
 fi
-git-cvsimport -v -C $module -r cvs -t cvs -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R "$@" $module >> $module.log 2>&1
+git-cvsimport -C $module -r cvs -t cvs/ -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R "$@" $module >> $module.log 2>&1

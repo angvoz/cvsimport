@@ -660,14 +660,15 @@ unless (-d $git_dir) {
 } else {
 	open(F, "-|", qw(git symbolic-ref HEAD)) or
 		die "Cannot run git symbolic-ref: $!\n";
-	chomp ($last_branch = <F>);
-	$last_branch = basename($last_branch);
+	$last_branch = <F>;
 	close(F);
 	unless ($last_branch) {
-		warn "Cannot read the last branch name: $! -- assuming 'master'\n";
-		$last_branch = "master";
+		warn "Cannot read the last branch name: $! -- resetting\n";
+		$last_branch = "";
 	}
 	$orig_branch = $last_branch;
+	chomp $last_branch;
+	$last_branch = basename($last_branch);
 	$tip_at_start = `git rev-parse --verify HEAD`;
 
 	# Get the last import timestamps
@@ -720,7 +721,7 @@ unless ($opt_P) {
 		my @opt;
 		@opt = split(/,/,$opt_p) if defined $opt_p;
 		unshift @opt, '-z', $opt_z if defined $opt_z;
-		unshift @opt, '-q'         unless defined $opt_v;
+		#unshift @opt, '-q'         unless defined $opt_v;
 		unless (defined($opt_p) && $opt_p =~ m/--no-cvs-direct/) {
 			push @opt, '--cvs-direct';
 		}
@@ -889,6 +890,7 @@ sub commit($) {
 	# compatibility with git2cvs
 	#substr($logmsg,32767) = "" if length($logmsg) > 32767;
 	$logmsg =~ s/[\s\n]*\z/\n/;
+	$logmsg =~ s/^\*\*\* empty log message \*\*\*\s*$//;
 
 	if (@skipped) {
 	    $logmsg .= "\n\nSKIPPED:\n\t";
@@ -978,13 +980,15 @@ while (<CVS>) {
 			next;
 		}
 		if ($branch ne $last_branch) {
-			system(qw(git update-ref -m cvsimport),
-				"$remote/$branch", "refs/tags/$opt_t$branch", "");
-			if($? != 0) {
-				print STDERR "Could not create branch $branch\n";
-				$ignorebranch{$branch} = 0;
-				$state=11;
-				next;
+			if (!get_headref("$remote/$branch")) {
+				system(qw(git update-ref -m cvsimport),
+					"$remote/$branch", "refs/tags/$opt_t$branch");
+				if($? != 0) {
+					print STDERR "Could not create branch $branch\n";
+					$ignorebranch{$branch} = 0;
+					$state=11;
+					next;
+				}
 			}
 			system("git", "read-tree", "$remote/$branch") == 0
 				or die "Branch switch to $branch failed: $?\n";
