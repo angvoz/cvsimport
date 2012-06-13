@@ -1,0 +1,30 @@
+#!/bin/bash
+module=$1 ; shift
+dir=`dirname $0`
+PATH=`realpath $dir`:$PATH
+top=`pwd`/
+if [[ -z $module || ! -d CVS/$module ]] ; then
+	echo "Usage: $0 MODULE [BRANCH|TAG ...]"
+fi
+
+cd CVS/$module
+if [[ $# -eq 0 ]] ; then
+	set -- $(git for-each-ref --shell --format '%(refname)' refs/heads/\*)
+fi
+
+for ref in "$@" ; do
+	rev=${ref##*/}
+	if [[ $rev == master ]] ; then
+		rev=HEAD
+	fi
+	echo "Comparing $ref:"
+	git checkout -q -f --detach $ref
+	git read-tree --empty
+	git clean -f -d -q
+	( cd $top/CVS && cvs -Q export -kk -r $rev $module )
+	git add -A
+	if ! git diff --cached --stat --exit-code ; then
+		git reset -q
+		$SHELL || exit
+	fi
+done
