@@ -1693,9 +1693,8 @@ static int compare_patch_sets_bytime(const PatchSet * ps1, const PatchSet * ps2)
 	CMPON(branch);
     }
 
-    CMPON(date);
-
     DIFF(compare_patch_sets_by_members(ps1, ps2));
+    CMPON(date);
     DIFF(strcmp(ps1->author, ps2->author));
     DIFF(strcmp(ps1->descr, ps2->descr));
 
