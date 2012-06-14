@@ -1028,7 +1028,7 @@ while (<CVS>) {
 		$tagfixup ++;
 	} elsif ($state == 6) {
 		if ($tagfixup) {
-			$logmsg = "CVSPS_FIXUP $tagfunk $tag\n\nThis commit was manufactured by git-cvsimport to account for inconsistencies in the placement of a tag by cvsps.  These changes come from other commits.";
+			$logmsg = "CVSPS_FIXUP $tagfunk $tag\n\nThis commit was manufactured by git-cvsimport to account for inconsistencies in the placement of a tag by cvsps.  These changes selectively revert/apply changes from other commits.";
 			$author_name = "git-cvsimport";
 			$author_email = "cvsps";
 			@commit_revisions = ();
