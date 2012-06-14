@@ -1,3 +1,17 @@
+This is a heavily modified version of cvsps, along with a modified
+git-cvsimport script.  I have used them successfully to import CVS repositories
+with messy and incomplete tags and branching, where the original git-cvsimport
+would introduce many data inconsistencies.  The only data inconsistency I've
+noticed is that files that were not included in a branch (but not explicitly
+deleted either) sometimes show up on that branch anyway.
+
+It includes an example cvsimport script and cvscheck script to verify
+integrity.
+
+In practice, cvs2git (from cvs2svn) might work better, but this runs faster
+with less configuration.
+
+(c) 2012 Dylan Simon
 CVSps (c) 2001,2002,2003 David Mansfield
 ------------------------------
 
