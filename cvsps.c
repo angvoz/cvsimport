@@ -597,7 +597,7 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "  -B sort by branching (helps when importing funky branch points)");
     debug(DEBUG_APPERROR, "  -F determine whether funky tags are invalid/inconsistent");
     debug(DEBUG_APPERROR, "  -U assume unnamed branches are the same");
-    debug(DEBUG_APPERROR, "  -D <datefmt> print dates according to the strftime datefmt [%c]");
+    debug(DEBUG_APPERROR, "  -D <datefmt> print dates according to the strftime datefmt [%%c]");
     debug(DEBUG_APPERROR, "  <repository> apply cvsps to repository.  overrides working directory");
     debug(DEBUG_APPERROR, "\ncvsps version %s\n", VERSION);
 
