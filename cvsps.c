@@ -1314,57 +1314,10 @@ static int get_branch(char * buff, const char * rev)
  * 
  * This all breaks down at branch points however
  */
-
-static void assign_pre_revision(Revision * psm, Revision * rev)
+static void assign_pre_revision(Revision *rev, Revision *pre)
 {
-    char pre[REV_STR_MAX], post[REV_STR_MAX];
-    int leaf_id;
-
-    if (!psm)
-	return;
-    
-    if (!get_branch_ext(post, psm->rev, &leaf_id))
-    {
-	debug(DEBUG_APPERROR, "get_branch malformed input %s:%s", psm->file->filename, psm->rev);
-	return;
-    }
-
     if (!rev)
-    {
-	/* if psm was last rev. for file, it's either an 
-	 * INITIAL, or first rev of a branch.  to test if it's 
-	 * the first rev of a branch, do get_branch twice - 
-	 * this should be the bp.
-	 */
-	if (get_branch(pre, post))
-	{
-	    psm->prev_rev = file_get_revision(psm->file, pre);
-	    list_add(&psm->branch_link, &psm->prev_rev->branch_children);
-	}
-	else if (leaf_id != 1)
-	    debug(DEBUG_APPMSG1, "WARNING: Cannot find parents for revision %s:%s; assuming initial", psm->file->filename, psm->rev);
 	return;
-    }
-
-    /* 
-     * is this canditate for 'pre' on the same branch as our 'post'? 
-     * this is the normal case
-     */
-    if (!get_branch(pre, rev->rev))
-    {
-	debug(DEBUG_APPERROR, "get_branch malformed input %s:%s", rev->file->filename, rev->rev);
-	return;
-    }
-
-    if (strcmp(pre, post) == 0)
-    {
-	psm->prev_rev = rev;
-	rev->next_rev = psm;
-	return;
-    }
-    
-    if (leaf_id != 1)
-	debug(DEBUG_APPMSG1, "WARNING: No branch parent for %s:%s", psm->file->filename, psm->rev);
 
     /* branches don't match. new_psm must be head of branch,
      * so psm is oldest rev. on branch. or oldest
@@ -1378,11 +1331,30 @@ static void assign_pre_revision(Revision * psm, Revision * rev)
      * we end up stamping the predecessor as 'INITIAL' incorrectly
      *
      */
-    if (!get_branch(pre, post))
-	return;
-    
-    psm->prev_rev = file_get_revision(psm->file, pre);
-    list_add(&psm->branch_link, &psm->prev_rev->branch_children);
+    if (!pre || pre->branch != rev->branch)
+    {
+	/* if psm was last rev. for file, it's either an 
+	 * INITIAL, or first rev of a branch.
+	 */
+	if (rev->branch->rev)
+	{
+	    Revision *prev = rev->branch->rev;
+	    /* normal branch start point */
+	    rev->prev_rev = prev;
+	    list_add(&rev->branch_link, &prev->branch_children);
+	}
+	else if (strcmp(rev->rev, "1.1"))
+	    debug(DEBUG_APPMSG1, "WARNING: Cannot find parents for revision %s:%s; assuming initial", rev->file->filename, rev->rev);
+    }
+    else
+    {
+	/* 
+	 * is this canditate for 'pre' on the same branch as our 'post'? 
+	 * this is the normal case
+	 */
+	rev->prev_rev = pre;
+	pre->next_rev = rev;
+    }
 }
 
 static void check_print_patch_set(PatchSet * ps)
