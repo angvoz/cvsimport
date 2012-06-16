@@ -18,7 +18,7 @@ typedef struct _CvsFile CvsFile;
 typedef struct _PatchSet PatchSet;
 typedef struct _PatchSetRange PatchSetRange;
 typedef struct _Revision Revision;
-typedef struct _GlobalSymbol GlobalSymbol;
+typedef struct _Symbol Symbol;
 typedef struct _Tag Tag;
 
 struct _Revision
@@ -106,8 +106,8 @@ struct _PatchSet
     time_t max_date;
     char *descr;
     char *author;
-    list_head tags; /* GlobalSymbol->link */
-    GlobalSymbol *branch;
+    list_head tags; /* Symbol->link */
+    Symbol *branch;
     list_head members; /* Revision->ps_link */
     /*
      * A 'branch add' patch set is a bogus patch set created automatically
@@ -124,7 +124,7 @@ struct _PatchSet
     enum funk_factor funk_factor : 4;
 
     /* for putting onto a list */
-    list_node all_link; /* all_patch_sets */
+    list_node link; /* Symbol.patch_sets, all_patch_sets */
     list_node collision_link; /* collisions */
 };
 
@@ -135,24 +135,27 @@ struct _PatchSetRange
     list_node link; /* show_patch_set_ranges */
 };
 
-struct _GlobalSymbol
+struct _Symbol
 {
     const char * name;
     PatchSet * ps;
     unsigned short depth; /* 1 = vendor (1.1.1), 2 = trunk (1.1), 3 = branch off trunk (1.1.2), ... */
     unsigned flags : 4;
     list_head tags; /* Tag->global_link */
-    list_node link; /* PatchSet.tags or unnamed_branches */
+    list_node tag_link; /* PatchSet.tags */
+    /* branches (with patches) only: */
+    list_node link; /* branches */
+    list_head patch_sets; /* PatchSet->link */
 };
 
 struct _Tag
 {
-    GlobalSymbol * sym;
+    Symbol * sym;
     Revision * rev;
     short branch; /* vendor branches are negative */
     unsigned flags : 4;
     unsigned dead_init : 1; /* tag points (or should point) to before file existed */
-    list_node global_link; /* GlobalSymbol.tags */
+    list_node global_link; /* Symbol.tags */
     list_node rev_link; /* Revision.tags */
 };
 

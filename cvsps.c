@@ -73,20 +73,28 @@ static const char * fnk_descr[] = {
     "FNK_HIDE_SOME"
 };
 
-static const GlobalSymbol head_sym = { "HEAD", NULL, 1, 0, { (struct list_link *)&head_sym.tags, (struct list_link *)&head_sym.tags } };
-static const Tag head_tag = { (/*unconst*/ GlobalSymbol *)&head_sym, NULL, 1 };
+static Symbol head_sym = { "HEAD", 
+    .depth = 1, 
+    .tags = { &head_sym.tags, &head_sym.tags },
+    .patch_sets = { &head_sym.patch_sets, &head_sym.patch_sets }
+};
+static const Tag head_tag = { (/*unconst*/ Symbol *)&head_sym,
+    .branch = 1,
+    .dead_init = 1
+};
 
 /* static globals */
 static int ps_counter;
 static void * ps_tree;
 static struct hash_table * global_symbols;
-static LIST_HEAD(unnamed_branches);
 static char strip_path[PATH_MAX];
 static int strip_path_len;
 static int statistics;
 static const char * test_log_file;
 static LIST_HEAD(all_patch_sets); /* PatchSet->all_link */
 static LIST_HEAD(collisions); /* PatchSet->collision_link */
+static LIST_HEAD(branches); /* Symbol->link */
+static LIST_HEAD(unnamed_branches); /* Symbol->link */
 
 /* settable via options */
 static int timestamp_fuzz_factor = 300;
@@ -112,7 +120,6 @@ static int no_rlog;
 static int cvs_direct;
 static int compress;
 static char compress_arg[8];
-static int sort_by_branch;
 static int funky_tag_validity;
 static int greedy_unnamed_branches;
 static char date_fmt[64] = "%c";
@@ -141,10 +148,9 @@ static void check_print_patch_set(PatchSet *);
 static void print_patch_set(PatchSet *);
 static void assign_patchset_id(PatchSet *);
 static int compare_rev_strings(const char *, const char *);
-static int compare_patch_sets_by_members(const PatchSet * ps1, const PatchSet * ps2);
-static int compare_patch_sets(const void *, const void *);
-static int compare_patch_sets_bytime_list(struct list_link *, struct list_link *);
-static int compare_patch_sets_bytime(const PatchSet *, const PatchSet *);
+static int compare_patch_sets_by_members(const PatchSet *, const PatchSet *);
+static int compare_patch_sets(const PatchSet *, const PatchSet *);
+static int compare_branches(struct list_link *, struct list_link *);
 static int is_revision_metadata(const char *);
 static int patch_set_member_regex(PatchSet * ps, regex_t * reg);
 static int patch_set_affects_branch(PatchSet *, const char *);
@@ -157,10 +163,11 @@ static void resolve_global_symbols();
 static int revision_affects_revision(const char *, const char *);
 static int revision_affects_symbol(Revision *, const char *);
 static int count_dots(const char *);
-static int check_tag_funk(GlobalSymbol *, Tag *, Revision *);
+static int check_tag_funk(Symbol *, Tag *, Revision *);
 static Revision * rev_follow_symbol(Revision *, Tag *);
 static void handle_collisions();
 static void name_unnamed_branches();
+static void sort_branch_patch_sets();
 
 int main(int argc, char *argv[])
 {
@@ -208,7 +215,8 @@ int main(int argc, char *argv[])
 
     name_unnamed_branches();
 
-    list_sort(&all_patch_sets, compare_patch_sets_bytime_list);
+    list_sort(&branches, compare_branches);
+    sort_branch_patch_sets();
 
     ps_counter = 0;
     walk_all_patch_sets(assign_patchset_id);
@@ -563,7 +571,7 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "             [--test-log <captured cvs log file>]");
     debug(DEBUG_APPERROR, "             [--no-rlog] [--diff-opts <option string>] [--cvs-direct]");
     debug(DEBUG_APPERROR, "             [--debuglvl <bitmask>] [-Z <compression>] [--root <cvsroot>]");
-    debug(DEBUG_APPERROR, "             [-q] [-B] [-F] [-U] [-D <datefmt>] [<repository>]");
+    debug(DEBUG_APPERROR, "             [-q] [-F] [-U] [-D <datefmt>] [<repository>]");
     debug(DEBUG_APPERROR, "");
     debug(DEBUG_APPERROR, "Where:");
     debug(DEBUG_APPERROR, "  -h display this informative message");
@@ -593,7 +601,6 @@ static int usage(const char * str1, const char * str2)
     debug(DEBUG_APPERROR, "  -Z <compression> A value 1-9 which specifies amount of compression");
     debug(DEBUG_APPERROR, "  --root <cvsroot> specify cvsroot.  overrides env. and working directory (cvs-direct only)");
     debug(DEBUG_APPERROR, "  -q be quiet about warnings");
-    debug(DEBUG_APPERROR, "  -B sort by branching (helps when importing funky branch points)");
     debug(DEBUG_APPERROR, "  -F determine whether funky tags are invalid/inconsistent");
     debug(DEBUG_APPERROR, "  -U assume unnamed branches are the same");
     debug(DEBUG_APPERROR, "  -D <datefmt> print dates according to the strftime datefmt [%%c]");
@@ -869,13 +876,6 @@ static int parse_args(int argc, char *argv[])
 	if (strcmp(argv[i], "-q") == 0)
 	{
 	    debuglvl &= ~DEBUG_APPMSG1;
-	    i++;
-	    continue;
-	}
-
-	if (strcmp(argv[i], "-B") == 0)
-	{
-	    sort_by_branch = 1;
 	    i++;
 	    continue;
 	}
@@ -1179,7 +1179,7 @@ static CvsFile * build_file_by_name(const char * fn)
     return retval;
 }
 
-static void merge_symbols(GlobalSymbol *sym, GlobalSymbol *old)
+static void merge_symbols(Symbol *sym, Symbol *old)
 {
     struct list_link *next;
 
@@ -1195,14 +1195,13 @@ static void merge_symbols(GlobalSymbol *sym, GlobalSymbol *old)
 	tag->sym = sym;
     }
     list_splice(&old->tags, &sym->tags);
-    list_del(&old->link);
-    /* slow, but this shouldn't happen too often: */
-    for (next = all_patch_sets.next; next != &all_patch_sets; next = next->next) 
+    for (next = old->patch_sets.next; next != &old->patch_sets; next = next->next) 
     {
-	PatchSet *ps = list_entry(next, PatchSet, all_link);
-	if (ps->branch == old)
-	    ps->branch = sym;
+	PatchSet *ps = list_entry(next, PatchSet, link);
+	ps->branch = sym;
     }
+    list_splice(&old->patch_sets, &sym->patch_sets);
+    list_del_once(&old->link);
 
     free(old);
 }
@@ -1235,7 +1234,7 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
     if (rev)
 	list_ins(&rev->ps_link, &retval->members);
 
-    find = (PatchSet**)tsearch(retval, &ps_tree, &compare_patch_sets);
+    find = (PatchSet**)tsearch(retval, &ps_tree, (comparison_fn_t)&compare_patch_sets);
 
     if (rev)
 	list_del(&rev->ps_link);
@@ -1274,11 +1273,11 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
 
 	retval->min_date = retval->date - timestamp_fuzz_factor;
 	retval->max_date = retval->date + timestamp_fuzz_factor;
-
-	list_add(&retval->all_link, &all_patch_sets);
     }
 
     patch_set_add_member(retval, rev);
+    list_add_once(&retval->branch->link, &branches);
+    list_add_once(&retval->link, &retval->branch->patch_sets);
 }
 
 static int get_branch_ext(char * buff, const char * rev, int * leaf)
@@ -1491,7 +1490,7 @@ static void print_patch_set(PatchSet * ps)
 
     for (next = ps->tags.next; next != &ps->tags; next = next->next)
     {
-	GlobalSymbol *sym = list_entry (next, GlobalSymbol, link);
+	Symbol *sym = list_entry (next, Symbol, tag_link);
 	printf("Tag: %s %s\n", sym->name, tag_flag_descr[ffs(sym->flags)]);
 	if (sym->flags & ~TAG_LATE)
 	{
@@ -1593,12 +1592,12 @@ static int compare_patch_sets_by_members(const PatchSet * ps1, const PatchSet * 
     if ((diff = (D))) \
 	return (diff < 0) ? -1 : 1
 #define CMPON(MEMBER) \
-    DIFF((long)ps1->MEMBER - (long)ps2->MEMBER)
+    DIFF((long)a->MEMBER - (long)b->MEMBER)
+#define CMPSTR(MEMBER) \
+    DIFF(strcmp(a->MEMBER, b->MEMBER))
 
-static int compare_patch_sets(const void * v_ps1, const void * v_ps2)
+static int compare_patch_sets(const PatchSet *a, const PatchSet *b)
 {
-    const PatchSet * ps1 = (const PatchSet *)v_ps1;
-    const PatchSet * ps2 = (const PatchSet *)v_ps2;
     long diff;
     time_t d, min, max;
 
@@ -1607,27 +1606,26 @@ static int compare_patch_sets(const void * v_ps1, const void * v_ps2)
      * and descr match.
      */
 
-    DIFF(strcmp(ps1->author, ps2->author));
-    DIFF(strcmp(ps1->descr, ps2->descr));
     CMPON(branch->name); /* "unnamed" branches equal */
     CMPON(branch_add);
-    DIFF(compare_patch_sets_by_members(ps1, ps2));
+    CMPON(author);
+    CMPSTR(descr);
 
     /* 
      * one of ps1 or ps2 is new.  the other should have the min_date
      * and max_date set to a window opened by the fuzz_factor
      */
-    if (ps1->min_date == 0)
+    if (a->min_date == 0)
     {
-	d = ps1->date;
-	min = ps2->min_date;
-	max = ps2->max_date;
+	d = a->date;
+	min = b->min_date;
+	max = b->max_date;
     } 
-    else if (ps2->min_date == 0)
+    else if (b->min_date == 0)
     {
-	d = ps2->date;
-	min = ps1->min_date;
-	max = ps1->max_date;
+	d = b->date;
+	min = a->min_date;
+	max = a->max_date;
     }
     else
     {
@@ -1636,51 +1634,42 @@ static int compare_patch_sets(const void * v_ps1, const void * v_ps2)
     }
 
     if (min < d && d < max)
-	return 0;
+	return compare_patch_sets_by_members(a, b);
 
     CMPON(date);
 
     return 0;
 }
 
-static int compare_patch_sets_bytime_list(struct list_link * l1, struct list_link * l2)
+static int compare_branch_patch_sets(struct list_link *la, struct list_link *lb)
 {
-    const PatchSet *ps1 = list_entry(l1, PatchSet, all_link);
-    const PatchSet *ps2 = list_entry(l2, PatchSet, all_link);
-    return compare_patch_sets_bytime(ps1, ps2);
-}
-
-static int compare_patch_sets_bytime(const PatchSet * ps1, const PatchSet * ps2)
-{
+    const PatchSet *a = list_entry(la, PatchSet, link);
+    const PatchSet *b = list_entry(lb, PatchSet, link);
     long diff;
 
-    /* When doing a time-ordering of patchsets, we don't need to
-     * fuzzy-match the time.  We've already done fuzzy-matching so we
-     * know that insertions are unique at this point.
-     */
-
-    if (sort_by_branch)
-    {
-	CMPON(branch->depth);
-	CMPON(branch);
-    }
-
-    if (ps1->max_date < ps2->date)
+    if (a->max_date < b->date)
 	return -1;
-    if (ps1->date > ps2->max_date)
+    if (a->date > b->max_date)
 	return 1;
     /* if they're within "fuzz", go by members just in case */
-    DIFF(compare_patch_sets_by_members(ps1, ps2));
+    DIFF(compare_patch_sets_by_members(a, b));
     CMPON(date);
-    DIFF(strcmp(ps1->author, ps2->author));
-    DIFF(strcmp(ps1->descr, ps2->descr));
-
-    if (!sort_by_branch)
-	CMPON(branch);
+    CMPSTR(author);
+    CMPSTR(descr);
 
     return 0;
 }
 
+static int compare_branches(struct list_link *la, struct list_link *lb)
+{
+    const Symbol *a = list_entry(la, Symbol, link);
+    const Symbol *b = list_entry(lb, Symbol, link);
+    long diff;
+
+    CMPON(depth);
+    CMPSTR(name);
+    return 0;
+}
 
 #undef CMPON
 #undef DIFF
@@ -2122,7 +2111,7 @@ static void parse_sym(CvsFile * file, char * sym)
 static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char * p_tag_str, int branch)
 {
     Revision * rev;
-    GlobalSymbol * sym = NULL;
+    Symbol * sym = NULL;
     Tag * tag = NULL;
     struct list_link *next;
     int depth;
@@ -2136,12 +2125,12 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
      * check the global_symbols
      */
     if (tag_str)
-	sym = (GlobalSymbol*)get_hash_object(global_symbols, tag_str);
+	sym = (Symbol*)get_hash_object(global_symbols, tag_str);
     else if (greedy_unnamed_branches)
     {
 	for (next = unnamed_branches.next; next != &unnamed_branches; next = next->next)
 	{
-	    GlobalSymbol *unsym = list_entry(next, GlobalSymbol, link);
+	    Symbol *unsym = list_entry(next, Symbol, link);
 	    /* determine if unsym conflicts with file */
 	    struct list_link *tagl;
 	    for (tagl = unsym->tags.next; tagl != &unsym->tags; tagl = tagl->next)
@@ -2162,10 +2151,10 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
     }
     if (!sym)
     {
-	sym = (GlobalSymbol*)calloc(1, sizeof(*sym));
+	sym = (Symbol*)calloc(1, sizeof(*sym));
 	sym->name = tag_str;
 	INIT_LIST_HEAD(&sym->tags);
-	INIT_LIST_HEAD(&sym->link);
+	INIT_LIST_HEAD(&sym->patch_sets);
 
 	if (tag_str)
 	    put_hash_object_ex(global_symbols, tag_str, sym, HT_NO_KEYCOPY, NULL, NULL);
@@ -2219,7 +2208,7 @@ static void resolve_global_symbols()
     reset_hash_iterator(global_symbols);
     while ((he_sym = next_hash_entry(global_symbols)))
     {
-	GlobalSymbol * sym = (GlobalSymbol*)he_sym->he_obj;
+	Symbol * sym = (Symbol*)he_sym->he_obj;
 	PatchSet * ps = NULL;
 
 	debug(DEBUG_STATUS, "resolving global symbol %s", sym->name);
@@ -2274,7 +2263,7 @@ static void resolve_global_symbols()
 	}
 
 	sym->ps = ps;
-	list_add(&sym->link, &ps->tags);
+	list_add(&sym->tag_link, &ps->tags);
 
 	/* check if this ps is one of the '-r' patchsets */
 	if (restrict_tag_start && strcmp(restrict_tag_start, sym->name) == 0)
@@ -2305,7 +2294,7 @@ static void resolve_global_symbols()
     reset_hash_iterator(global_symbols);
     while ((he_sym = next_hash_entry(global_symbols)))
     {
-	GlobalSymbol * sym = (GlobalSymbol*)he_sym->he_obj;
+	Symbol * sym = (Symbol*)he_sym->he_obj;
 
 	if (!sym->ps)
 	    continue;
@@ -2483,7 +2472,7 @@ static void patch_set_add_member(PatchSet * ps, Revision * psm)
  * look at all revisions starting at rev and going forward until 
  * ps->date and see whether they are invalid or just funky.
  */
-static int check_tag_funk(GlobalSymbol *tag, Tag *branch, Revision * rev)
+static int check_tag_funk(Symbol *tag, Tag *branch, Revision * rev)
 {
     int retval = 0;
 
@@ -2608,13 +2597,19 @@ static void handle_collisions()
     }
 }
 
+static void walk_patch_sets(void (*action)(PatchSet *), list_head *list)
+{
+    struct list_link *next;
+    for (next = list->next; next != list; next = next->next)
+	action(list_entry(next, PatchSet, link));
+}
+
 static void walk_all_patch_sets(void (*action)(PatchSet *))
 {
     struct list_link * next;
-    for (next = all_patch_sets.next; next != &all_patch_sets; next = next->next) {
-	PatchSet * ps = list_entry(next, PatchSet, all_link);
-	action(ps);
-    }
+    for (next = branches.next; next != &branches; next = next->next)
+	walk_patch_sets(action, &((Symbol *)list_entry(next, Symbol, link))->patch_sets);
+    walk_patch_sets(action, &all_patch_sets);
 }
 
 static void name_unnamed_branches()
@@ -2625,11 +2620,20 @@ static void name_unnamed_branches()
 
     while (!list_empty(&unnamed_branches))
     {
-	GlobalSymbol *sym = list_entry(unnamed_branches.next, GlobalSymbol, link);
+	Symbol *sym = list_entry(unnamed_branches.next, Symbol, link);
 	assert(!sym->name);
 	sprintf(&name[namelen], "%u", id++);
 	sym->name = get_string(name);
 	put_hash_object_ex(global_symbols, sym->name, sym, HT_NO_KEYCOPY, NULL, NULL);
-	list_del(unnamed_branches.next);
+	list_del(&sym->link);
+	if (!list_empty(&sym->patch_sets))
+	    list_add(&sym->link, &branches);
     }
+}
+
+static void sort_branch_patch_sets()
+{
+    struct list_link *next;
+    for (next = branches.next; next != &branches; next = next->next)
+	list_sort(&list_entry(next, Symbol, link)->patch_sets, compare_branch_patch_sets);
 }

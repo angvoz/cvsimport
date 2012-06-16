@@ -2,7 +2,7 @@ MAJOR=2
 MINOR=1
 CC?=gcc
 CFLAGS?=-g -O2 -Wall
-CPPFLAGS?=-I. -DVERSION=\"$(MAJOR).$(MINOR)\"
+CPPFLAGS?=-I. -DVERSION=\"$(MAJOR).$(MINOR)\" -D_GNU_SOURCE=1
 prefix?=/usr/local
 OBJS=\
 	cbtcommon/debug.o\
