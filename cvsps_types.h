@@ -26,6 +26,7 @@ struct _Revision
     char * rev;
     CvsFile * file;
     Tag * branch;
+    time_t date;
     unsigned dead : 1;
     unsigned branch_add : 1;
     /*
@@ -138,9 +139,8 @@ struct _GlobalSymbol
 {
     const char * name;
     PatchSet * ps;
+    unsigned short depth; /* 1 = vendor (1.1.1), 2 = trunk (1.1), 3 = branch off trunk (1.1.2), ... */
     unsigned flags : 4;
-    unsigned branch : 1;
-    unsigned short depth; /* 0 means (on) trunk */
     list_head tags; /* Tag->global_link */
     list_node link; /* PatchSet.tags or unnamed_branches */
 };
@@ -149,7 +149,7 @@ struct _Tag
 {
     GlobalSymbol * sym;
     Revision * rev;
-    unsigned short branch;
+    short branch; /* vendor branches are negative */
     unsigned flags : 4;
     unsigned dead_init : 1; /* tag points (or should point) to before file existed */
     list_node global_link; /* GlobalSymbol.tags */

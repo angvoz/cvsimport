@@ -89,6 +89,7 @@ static INLINE void __list_del(struct list_link * prev,
 static INLINE void list_del(list_node *entry)
 {
         __list_del(entry->prev, entry->next);
+	entry->prev = entry->next = NULL;
 }
 
 static INLINE int list_empty(list_head *head)

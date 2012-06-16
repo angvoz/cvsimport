@@ -73,7 +73,7 @@ static const char * fnk_descr[] = {
     "FNK_HIDE_SOME"
 };
 
-static const GlobalSymbol head_sym = { "HEAD", .tags = { (struct list_link *)&head_sym.tags, (struct list_link *)&head_sym.tags } };
+static const GlobalSymbol head_sym = { "HEAD", NULL, 1, 0, { (struct list_link *)&head_sym.tags, (struct list_link *)&head_sym.tags } };
 static const Tag head_tag = { (/*unconst*/ GlobalSymbol *)&head_sym, NULL, 1 };
 
 /* static globals */
@@ -133,7 +133,7 @@ static Revision * file_get_revision(CvsFile *, const char *);
 static Revision * cvs_file_add_revision(CvsFile *, const char *);
 static void cvs_file_add_symbol(CvsFile * file, const char * rev, const char * tag, int branch);
 static Tag *find_branch_tag(Revision *, int);
-static void assign_patch_set(Revision *, time_t, const char *, const char *);
+static void assign_patch_set(Revision *, const char *, const char *);
 static void assign_pre_revision(Revision *, Revision * rev);
 static void patch_set_add_member(PatchSet * ps, Revision * psm);
 static void walk_all_patch_sets(void (*action)(PatchSet *));
@@ -154,9 +154,9 @@ static PatchSet * create_patch_set();
 static PatchSetRange * create_patch_set_range();
 static void parse_sym(CvsFile *, char *);
 static void resolve_global_symbols();
+static int revision_affects_revision(const char *, const char *);
 static int revision_affects_symbol(Revision *, const char *);
 static int count_dots(const char *);
-static int is_vendor_branch(const char *);
 static int check_tag_funk(GlobalSymbol *, Tag *, Revision *);
 static Revision * rev_follow_symbol(Revision *, Tag *);
 static void handle_collisions();
@@ -252,7 +252,6 @@ static void load_from_cvs()
     int state = NEED_RCS_FILE;
     CvsFile * file = NULL;
     Revision * rev = NULL;
-    time_t date;
     char authbuff[AUTH_STR_MAX];
     int logbufflen = LOG_STR_MAX + 1;
     char * logbuff = malloc(logbufflen);
@@ -384,7 +383,7 @@ static void load_from_cvs()
 
 		strncpy(datebuff, buff + 6, 19);
 		datebuff[19] = 0;
-		convert_date(&date, datebuff);
+		convert_date(&rev->date, datebuff);
 
 		strcpy(authbuff, "unknown");
 		p = strstr(buff, "author: ");
@@ -427,7 +426,7 @@ static void load_from_cvs()
 		    if (rev->dead && get_branch_ext(prev, rev->rev, &leaf) && leaf == 1 &&
 			    strncmp(logbuff, "file ", 5) == 0 && strstr(logbuff, " added on branch ") &&
 			    ((!get_branch(prev, prev) || 
-			      ((prs = file_get_revision(file, prev)->ps)->min_date < date && date < prs->max_date))))
+			      ((prs = file_get_revision(file, prev)->ps)->min_date < rev->date && rev->date < prs->max_date))))
 		    {
 			/* 
 			 * We expect a 'file xyz initially added on branch abc' here.
@@ -440,7 +439,7 @@ static void load_from_cvs()
 			rev->branch_add = 1;
 		    }
 
-		    assign_patch_set(rev, date, logbuff, authbuff);
+		    assign_patch_set(rev, logbuff, authbuff);
 		}
 
 		logbuff[0] = 0;
@@ -1186,9 +1185,10 @@ static void merge_symbols(GlobalSymbol *sym, GlobalSymbol *old)
 
     assert(!sym->name && !old->name);
     sym->flags |= old->flags;
-    sym->branch |= old->branch;
     if (old->depth > sym->depth)
-	sym->depth = old->depth;
+	sym->depth = old->depth | (sym->depth & 1);
+    else
+	sym->depth |= old->depth & 1;
     for (next = old->tags.next; next != &old->tags; next = next->next) 
     {
 	Tag *tag = list_entry(next, Tag, global_link);
@@ -1207,7 +1207,7 @@ static void merge_symbols(GlobalSymbol *sym, GlobalSymbol *old)
     free(old);
 }
 
-static void assign_patch_set(Revision *rev, time_t dat, const char * log, const char * author)
+static void assign_patch_set(Revision *rev, const char * log, const char * author)
 {
     PatchSet * retval = NULL, **find = NULL;
 
@@ -1217,7 +1217,7 @@ static void assign_patch_set(Revision *rev, time_t dat, const char * log, const 
 	return;
     }
 
-    retval->date = dat;
+    retval->date = rev->date;
     retval->author = get_string(author);
     retval->descr = xstrdup(log);
     retval->branch = rev->branch->sym;
@@ -1270,7 +1270,7 @@ static void assign_patch_set(Revision *rev, time_t dat, const char * log, const 
     else
     {
 	debug(DEBUG_STATUS, "new patch set!");
-	debug(DEBUG_STATUS, "%s %s %d", retval->author, retval->descr, dat);
+	debug(DEBUG_STATUS, "%s %s %d", retval->author, retval->descr, retval->date);
 
 	retval->min_date = retval->date - timestamp_fuzz_factor;
 	retval->max_date = retval->date + timestamp_fuzz_factor;
@@ -1693,6 +1693,11 @@ static int compare_patch_sets_bytime(const PatchSet * ps1, const PatchSet * ps2)
 	CMPON(branch);
     }
 
+    if (ps1->max_date < ps2->date)
+	return -1;
+    if (ps1->date > ps2->max_date)
+	return 1;
+    /* if they're within "fuzz", go by members just in case */
     DIFF(compare_patch_sets_by_members(ps1, ps2));
     CMPON(date);
     DIFF(strcmp(ps1->author, ps2->author));
@@ -1945,7 +1950,7 @@ static Tag *find_branch_tag(Revision *rev, int branch)
     for (next = rev->tags.next; next != &rev->tags; next = next->next)
     {
 	Tag *tag = list_entry(next, Tag, rev_link);
-	if (tag->branch == branch)
+	if (abs(tag->branch) == branch)
 	    return tag;
 	if (!tag->branch)
 	    break;
@@ -2098,7 +2103,7 @@ static void parse_sym(CvsFile * file, char * sym)
     char * tag = sym, *eot;
     int leaf, final_branch = -1;
     char rev[REV_STR_MAX];
-    char rev2[REV_STR_MAX];
+    char rev2[REV_STR_MAX] = "";
     
     while (*tag && isspace(*tag))
 	tag++;
@@ -2111,8 +2116,9 @@ static void parse_sym(CvsFile * file, char * sym)
     if (!eot)
 	return;
 
-    *eot = 0;
-    eot += 2;
+    *eot++ = 0;
+    if (*eot == ' ') eot++;
+    chop(eot);
     
     if (!get_branch_ext(rev, eot, &leaf))
     {
@@ -2131,16 +2137,13 @@ static void parse_sym(CvsFile * file, char * sym)
 	
 	cvs_file_add_symbol(file, rev2, tag, leaf);
     }
-    else if (is_vendor_branch(eot)) {
+    else if (count_dots(rev)&1) {
 	/* see cvs manual: what is this vendor tag? */
-	cvs_file_add_symbol(file, rev, tag, leaf);
+	cvs_file_add_symbol(file, rev, tag, -leaf);
     }
     else
     {
-	strcpy(rev, eot);
-	chop(rev);
-
-	cvs_file_add_symbol(file, rev, tag, 0);
+	cvs_file_add_symbol(file, eot, tag, 0);
     }
 }
 
@@ -2200,37 +2203,14 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
 
     rev = cvs_file_add_revision(file, rev_str);
 
-    /* do some sanity checks (should be unnecessary) */
-    for (next = rev->tags.next; next != &rev->tags; next = next->next) 
-    {
-	tag = list_entry(next, Tag, rev_link);
-	if (tag->sym == sym)
-	{
-	    if (tag->branch != branch)
-		debug(DEBUG_APPERROR, "conflicting tag and branch %s:%s on %s", rev_str, tag_str, file->filename);
-	    else
-		debug(DEBUG_APPERROR, "trying to re-add symbol %s on %s", tag_str, file->filename);
-	    return;
-	}
-	if (branch && tag->branch == branch)
-	{
-	    if (!tag->sym)
-	    {
-		debug(DEBUG_APPERROR, "filling in branch name %s.%d:%s on %s", rev_str, branch, tag_str, file->filename);
-		tag->sym = sym;
-		list_add(&tag->global_link, &sym->tags);
-	    }
-	    else
-		debug(DEBUG_APPERROR, "attempt to add existing branch %s:%s to %s", rev_str, tag_str, file->filename);
-	    return;
-	}
-    }
-
-    depth = (count_dots(rev_str) + !!branch) / 2;
+    depth = 1 + count_dots(rev_str) + !!branch;
+    assert(depth >= 2 && !!branch == (depth & 1));
+    if (branch < 0)
+	depth -= 2; /* treat vendor as "parent" */
     if (depth > sym->depth)
-	sym->depth = depth;
-    if (branch)
-	sym->branch = 1;
+	sym->depth = depth | (sym->depth & 1);
+    else
+	sym->depth |= depth & 1;
 
     tag = (Tag*)calloc(1, sizeof(*tag));
     tag->rev = rev;
@@ -2282,6 +2262,9 @@ static void resolve_global_symbols()
 	{
 	    Tag * tag = list_entry(next, Tag, global_link);
 	    Revision * rev = tag->rev;
+
+	    if (!rev)
+		continue;
 
 	    if (!rev->present)
 	    {
@@ -2369,6 +2352,9 @@ static void resolve_global_symbols()
 	    int flag = 0;
 	    Revision * next_rev;
 
+	    if (!rev)
+		continue;
+
 	    if (!tag->dead_init && !patch_set_affects_patch_set(rev->ps, sym->ps))
 		flag |= TAG_SPLIT;
 
@@ -2423,7 +2409,7 @@ static void get_sym_revision(char *rev, Tag *sym)
 	    rev[len++] = '.';
     }
     if (sym->branch)
-	len += sprintf(&rev[len], "%d", sym->branch);
+	len += sprintf(&rev[len], "%d", abs(sym->branch));
     rev[len] = 0;
 }
 
@@ -2466,16 +2452,6 @@ static int count_dots(const char * p)
 	    dots++;
 
     return dots;
-}
-
-/*
- * When importing vendor sources, (apparently people do this)
- * the code is added on a 'vendor' branch, which, for some reason
- * doesn't use the magic-branch-tag format.  Try to detect that now
- */
-static int is_vendor_branch(const char * rev)
-{
-    return !(count_dots(rev)&1);
 }
 
 static int patch_set_affects_patch_set(PatchSet *ps1, PatchSet *ps)

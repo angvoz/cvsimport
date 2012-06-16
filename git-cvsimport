@@ -991,6 +991,7 @@ while (<CVS>) {
 					$state=11;
 					next;
 				}
+				system(qw(git tag -d), "$opt_t$branch");
 			}
 			system("git", "read-tree", "$remote/$branch") == 0
 				or die "Branch switch to $branch failed: $?\n";
@@ -1010,7 +1011,7 @@ while (<CVS>) {
 		}
 		$commit_ids[$patchset] = $commit_id = commit("$remote/$branch");
 		if (($commitcount & 1023) == 0) {
-			system(qw(git repack -a -d));
+			system(qw(git repack));
 		}
 		$logmsg = "";
 		$state = 5;
@@ -1051,15 +1052,7 @@ unless ($opt_P) {
 	unlink($cvspsfile);
 }
 
-# The heuristic of repacking every 1024 commits can leave a
-# lot of unpacked data.  If there is more than 1MB worth of
-# not-packed objects, repack once more.
-my $line = `git count-objects`;
-if ($line =~ /^(\d+) objects, (\d+) kilobytes$/) {
-  my ($n_objects, $kb) = ($1, $2);
-  1024 < $kb
-    and system(qw(git repack -a -d));
-}
+system(qw(git repack -a -d));
 
 foreach my $git_index (values %index) {
     if ($git_index ne "$git_dir/index") {
