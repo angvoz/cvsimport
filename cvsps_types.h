@@ -139,7 +139,7 @@ struct _Symbol
 {
     const char * name;
     PatchSet * ps;
-    unsigned short depth; /* 1 = vendor (1.1.1), 2 = trunk (1.1), 3 = branch off trunk (1.1.2), ... */
+    unsigned short depth; /* 2 = trunk (1.1), 3 = branch off trunk (1.1.2), ... */
     unsigned flags : 4;
     list_head tags; /* Tag->global_link */
     list_node tag_link; /* PatchSet.tags */

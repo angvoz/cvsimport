@@ -2166,8 +2166,6 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
 
     depth = 1 + count_dots(rev_str) + !!branch;
     assert(depth >= 2 && !!branch == (depth & 1));
-    if (branch < 0)
-	depth -= 2; /* treat vendor as "parent" */
     if (depth > sym->depth)
 	sym->depth = depth | (sym->depth & 1);
     else
