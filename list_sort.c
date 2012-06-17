@@ -60,7 +60,7 @@ void list_sort(list_head * list, int (*node_compare)(list_node *, list_node *))
 		
 		list_del(t);
 		
-		list_ins(t, &tmp);
+		list_add_tail(t, &tmp);
 	    }
 
 	    p = q;

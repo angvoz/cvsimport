@@ -91,7 +91,7 @@ static char strip_path[PATH_MAX];
 static int strip_path_len;
 static int statistics;
 static const char * test_log_file;
-static LIST_HEAD(all_patch_sets); /* PatchSet->all_link */
+static LIST_HEAD(all_patch_sets); /* PatchSet->link */
 static LIST_HEAD(collisions); /* PatchSet->collision_link */
 static LIST_HEAD(branches); /* Symbol->link */
 static LIST_HEAD(unnamed_branches); /* Symbol->link */
@@ -169,6 +169,7 @@ static Revision * rev_follow_symbol(Revision *, Tag *);
 static void handle_collisions();
 static void name_unnamed_branches();
 static void sort_branch_patch_sets();
+static void resort_patch_sets();
 
 int main(int argc, char *argv[])
 {
@@ -225,6 +226,8 @@ int main(int argc, char *argv[])
     handle_collisions();
 
     resolve_global_symbols();
+
+    resort_patch_sets();
 
     if (statistics)
 	print_statistics(ps_tree);
@@ -659,7 +662,7 @@ static int parse_args(int argc, char *argv[])
 		else
 		    range->max_counter = INT_MAX;
 
-		list_ins(&range->link, &show_patch_set_ranges);
+		list_add_tail(&range->link, &show_patch_set_ranges);
 	    }
 	    while ((min_str = strtok(NULL, ",")));
 
@@ -1229,7 +1232,7 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
      *    present in the existing ps.
      */
     if (rev)
-	list_ins(&rev->ps_link, &retval->members);
+	list_add_tail(&rev->ps_link, &retval->members);
 
     find = (PatchSet**)tsearch(retval, &ps_tree, (comparison_fn_t)&compare_patch_sets);
 
@@ -1273,8 +1276,8 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
     }
 
     patch_set_add_member(retval, rev);
-    list_add_safe(&retval->branch->link, &branches);
-    list_add_safe(&retval->link, &retval->branch->patch_sets);
+    list_add_tail_safe(&retval->branch->link, &branches);
+    list_add_tail_safe(&retval->link, &retval->branch->patch_sets);
 }
 
 static Revision *make_vendor_shadow(Revision *rev)
@@ -1372,7 +1375,7 @@ static void assign_pre_revision(Revision *rev, Revision *pre)
 	    Revision *prev = rev->branch->rev;
 	    /* normal branch start point */
 	    rev->prev_rev = prev;
-	    list_add(&rev->branch_link, &prev->branch_children);
+	    list_add_tail(&rev->branch_link, &prev->branch_children);
 
 	    if (rev->vendor_shadow && !strcmp(prev->ps->descr, "Initial revision\n"))
 		prev->branch_add = 1;
@@ -1675,8 +1678,6 @@ static int compare_branch_patch_sets(struct list_link *la, struct list_link *lb)
     /* if they're within "fuzz", go by members just in case */
     DIFF(compare_patch_sets_by_members(a, b));
     CMPON(date);
-    CMPSTR(author);
-    CMPSTR(descr);
 
     return 0;
 }
@@ -1692,6 +1693,30 @@ static int compare_branches(struct list_link *la, struct list_link *lb)
     return 0;
 }
 
+static int compare_final_patch_sets(struct list_link *la, struct list_link *lb)
+{
+    const PatchSet *a = list_entry(la, PatchSet, link);
+    const PatchSet *b = list_entry(lb, PatchSet, link);
+    long diff;
+
+    if (a->max_date < b->date)
+	return -1;
+    if (a->date > b->max_date)
+	return 1;
+
+    /* we want vendor patches to come before their shadows, and more generally
+     * deeper commits to come before their potential merges */
+    if (a->vendor_shadowed == b)
+	return 1;
+    if (b->vendor_shadowed == a)
+	return -1;
+    DIFF((long)b->branch->depth - (long)a->branch->depth);
+    CMPON(date);
+
+    return 0;
+}
+
+#undef CMPSTR
 #undef CMPON
 #undef DIFF
 
@@ -2172,7 +2197,7 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
 	if (tag_str)
 	    put_hash_object_ex(global_symbols, tag_str, sym, HT_NO_KEYCOPY, NULL, NULL);
 	else
-	    list_add(&sym->link, &unnamed_branches);
+	    list_add_tail(&sym->link, &unnamed_branches);
     }
 
     rev = cvs_file_add_revision(file, rev_str);
@@ -2193,7 +2218,7 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
     if (branch)
 	list_add(&tag->rev_link, &rev->tags);
     else
-	list_ins(&tag->rev_link, &rev->tags);
+	list_add_tail(&tag->rev_link, &rev->tags);
 
     if (tag_str)
 	put_hash_object_ex(file->symbols, tag_str, tag, HT_NO_KEYCOPY, NULL, NULL);
@@ -2276,7 +2301,7 @@ static void resolve_global_symbols()
 	}
 
 	sym->ps = ps;
-	list_add(&sym->tag_link, &ps->tags);
+	list_add_tail(&sym->tag_link, &ps->tags);
 
 	/* check if this ps is one of the '-r' patchsets */
 	if (restrict_tag_start && strcmp(restrict_tag_start, sym->name) == 0)
@@ -2462,8 +2487,7 @@ static void patch_set_add_member(PatchSet * ps, Revision * psm)
 		 * if it isn't already.
 		 */
 		if (!order) {
-			if (ps->collision_link.next == NULL)
-				list_add(&ps->collision_link, &collisions);
+			list_add_tail_safe(&ps->collision_link, &collisions);
 			return;
 		}
 
@@ -2482,7 +2506,7 @@ static void patch_set_add_member(PatchSet * ps, Revision * psm)
     }
 
     psm->ps = ps;
-    list_ins(&psm->ps_link, &ps->members);
+    list_add_tail(&psm->ps_link, &ps->members);
 }
 
 /* 
@@ -2640,7 +2664,7 @@ static void name_unnamed_branches()
 	put_hash_object_ex(global_symbols, sym->name, sym, HT_NO_KEYCOPY, NULL, NULL);
 	list_del(&sym->link);
 	if (!list_empty(&sym->patch_sets))
-	    list_add(&sym->link, &branches);
+	    list_add_tail(&sym->link, &branches);
     }
 }
 
@@ -2649,4 +2673,60 @@ static void sort_branch_patch_sets()
     Symbol *branch;
     list_for_each_entry (branch, &branches, link)
 	list_sort(&branch->patch_sets, compare_branch_patch_sets);
+}
+
+static void resort_patch_sets()
+{
+    LIST_HEAD(heads);
+    Symbol *branch;
+
+    /* first add all orphan branches */
+    list_for_each_entry_safe (branch, &branches, link)
+    {
+	if (!branch->ps)
+	{
+	    list_del(&branch->link);
+	    list_add_tail(&branch->link, &heads);
+	}
+    }
+
+    while (1)
+    {
+	struct list_link *next = NULL;
+	PatchSet *ps;
+
+	list_for_each_entry_safe (branch, &heads, link)
+	{
+	    if (list_empty(&branch->patch_sets)) 
+		list_del(&branch->link);
+	    else if (!next || compare_final_patch_sets(next, branch->patch_sets.next) > 0)
+		next = branch->patch_sets.next;
+	}
+
+	if (!next) {
+	    assert(list_empty(&heads));
+	    if (list_empty(&branches))
+		break;
+	    /* well, that's unfortunate... */
+	    next = branches.next;
+	    debug(DEBUG_APPMSG1, "Some branches contain unreachable patchsets! Continuing with %s.", list_entry(next, Symbol, link)->name);
+	    list_del(next);
+	    list_add(next, &heads);
+	    continue;
+	}
+
+	list_del(next);
+	list_add_tail(next, &all_patch_sets);
+
+	ps = list_entry(next, PatchSet, link);
+	list_for_each_entry (branch, &ps->tags, tag_link)
+	{
+	    assert(branch->ps == ps);
+	    if (branch->link.next)
+	    {
+		list_del(&branch->link);
+		list_add_tail(&branch->link, &heads);
+	    }
+	}
+    }
 }

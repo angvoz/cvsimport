@@ -67,20 +67,28 @@ static INLINE void list_add(list_node *li, list_head *head)
 /*
  * Insert a new entry after the specified head..
  */
-static INLINE unsigned list_add_safe(list_node *li, list_head *head)
+static INLINE int list_add_safe(list_node *li, list_head *head)
 {
 	if (li->next)
 		return 0;
-	__list_add(li, head, head->next);
+	list_add(li, head);
 	return 1;
 }
 
 /*
  * Insert a new entry before the specified head..
  */
-static INLINE void list_ins(list_node *li, list_head *head)
+static INLINE void list_add_tail(list_node *li, list_head *head)
 {
         __list_add(li, head->prev, head);
+}
+
+static INLINE int list_add_tail_safe(list_node *li, list_head *head)
+{
+	if (li->next)
+		return 0;
+	list_add_tail(li, head);
+	return 1;
 }
 
 /*
@@ -103,7 +111,7 @@ static INLINE void list_del(list_node *entry)
 	entry->prev = entry->next = NULL;
 }
 
-static INLINE unsigned list_del_safe(list_node *entry)
+static INLINE int list_del_safe(list_node *entry)
 {
 	if (!entry->next)
 		return 0;
