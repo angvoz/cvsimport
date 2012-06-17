@@ -22,6 +22,7 @@ for ref in "$@" ; do
 	git read-tree --empty
 	git clean -f -d -q
 	( cd $top/CVS && cvs -Q export -kk -r $rev $module )
+	[[ -f .gitignore ]] || git checkout -q HEAD -- .gitignore
 	git add -A
 	if ! git diff --cached --stat --exit-code ; then
 		git reset -q

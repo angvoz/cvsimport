@@ -22,4 +22,4 @@ fi
 if [[ -f $module.opts ]] ; then
 	set -- `< $module.opts` "$@"
 fi
-git-cvsimport -C $repo -o master -i -k -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R "$@" $module >> $repo.log 2>&1
+git-cvsimport -C $repo -o master -i -g -z 300 -M '^Merge:\s+(?:[A-Za-z][A-Za-z0-9_-]*\s+)?([A-Za-z][A-Za-z0-9_-]*)\s*(?:$|\n)' ${authors:+-A $authors} -R "$@" $module >> $repo.log 2>&1

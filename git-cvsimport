@@ -18,7 +18,7 @@ use strict;
 use warnings;
 use Getopt::Long;
 use File::Spec;
-use File::Temp qw(tempfile tmpnam);
+use File::Temp qw(tempfile);
 use File::Path qw(mkpath);
 use File::Basename qw(basename dirname);
 use Time::Local;
@@ -30,7 +30,7 @@ use IPC::Open2;
 $SIG{'PIPE'}="IGNORE";
 #$ENV{'TZ'}="UTC";
 
-our ($opt_h,$opt_o,$opt_v,$opt_u,$opt_d,$opt_p,$opt_C,$opt_z,$opt_i,$opt_P, $opt_s,$opt_m,@opt_M,$opt_A,$opt_S,$opt_L, $opt_a, $opt_r, $opt_R, $opt_t);
+our ($opt_h,$opt_o,$opt_v,$opt_u,$opt_d,$opt_p,$opt_C,$opt_z,$opt_i,$opt_P, $opt_s,$opt_m,@opt_M,$opt_A,$opt_S,$opt_L, $opt_a, $opt_r, $opt_R, $opt_t, $opt_g);
 my (%conv_author_name, %conv_author_email);
 
 sub usage(;$) {
@@ -41,7 +41,7 @@ Usage: git cvsimport     # fetch/update GIT from CVS
        [-o branch-for-HEAD] [-h] [-v] [-d CVSROOT] [-A author-conv-file]
        [-p opts-for-cvsps] [-P file] [-C GIT_repository] [-z fuzz] [-i]
        [-u] [-s subst] [-a] [-m] [-M regex] [-S regex] [-L commitlimit]
-       [-r remote] [-R] [-t tag-prefix] CVS_module]
+       [-r remote] [-R] [-t tag-prefix] [-g] [CVS_module]
 END
 	exit(1);
 }
@@ -128,7 +128,7 @@ sub read_repo_config {
 	}
 }
 
-my $opts = "haivmkuo:d:p:r:C:z:s:M:P:A:S:L:Rt:";
+my $opts = "haivmkuo:d:p:r:C:z:s:M:P:A:S:L:Rt:g";
 read_repo_config($opts);
 Getopt::Long::Configure( 'no_ignore_case', 'bundling' );
 
@@ -194,6 +194,8 @@ if ($opt_m) {
 if (@opt_M) {
 	push (@mergerx, map { qr/$_/ } @opt_M);
 }
+
+$opt_g = qr{(?:\A|/)\K\.cvsignore\z} if $opt_g;
 
 # Remember UTC of our starting time
 # we'll want to avoid importing commits
@@ -505,7 +507,7 @@ sub file {
 
 	undef $self->{'mode'};
 	my ($fh, $name) = tempfile('gitcvs.XXXXXX',
-		    DIR => File::Spec->tmpdir(), UNLINK => 1);
+		    TMPDIR => 1, UNLINK => 1);
 
 	$self->_file($fn,$rev) and $res = $self->_line($fh);
 
@@ -736,7 +738,7 @@ unless ($opt_P) {
 		die "Could not start cvsps: $!\n";
 	}
 	($cvspsfh, $cvspsfile) = tempfile('gitXXXXXX', SUFFIX => '.cvsps',
-					  DIR => File::Spec->tmpdir());
+					  TMPDIR => 1);
 	while (<CVSPS>) {
 	    print $cvspsfh $_;
 	}
@@ -800,12 +802,88 @@ sub read_tree ($) {
 		or die "Branch switch to $ref failed: $! $?\n";
 }
 
+sub lookup_tree($$) {
+	my ($tree, $fn) = @_;
+	my $pid = open(my $F, '-|');
+	die $! unless defined $pid;
+	if (!$pid) {
+		exec("git", "ls-tree", $tree, $fn)
+			or die "Cannot get object: $!\n";
+	}
+	local $_ = <$F>;
+	close $F;
+	return unless defined and $? == 0;
+
+	chomp;
+	my ($mode, $type, $sha, $file) = split;
+	$mode = oct($mode) & 0777;
+	return ($sha, $mode, $type);
+}
+
+sub hash_object($;$) {
+	my ($f, $fn) = @_;
+	my $pid = open(my $F, '-|');
+	die $! unless defined $pid;
+	if (!$pid) {
+	    exec("git", "hash-object", "-w", $fn ? ("--path=$fn") : (), $f)
+		or die "Cannot create object: $!\n";
+	}
+	my $sha = <$F>;
+	chomp $sha;
+	close $F;
+	return $sha;
+}
+
 sub symbol_name($) {
 	local $_ = shift;
 	return $opt_o if $_ eq "HEAD";
 	tr/_/\./ if ( $opt_u );
 	s:/:$opt_s:g;
 	$_
+}
+
+# default cvsignore list, with CVS/RCS-related thing removed
+my @cvsignore = (qw(core tags TAGS .make.state .nse_depinfo ,* .del-* *.a *.olb *.o *.obj *.so *.Z *~ *.old *.elc *.ln *.bak *.BAK *.orig *.rej *.exe _$* *$), '.#*',
+	# '#*', # this will be intepreted as a comment. fix?
+);
+
+sub gitignore(;$$) {
+	my ($cf, $root) = @_;
+	$root //= 1 unless defined $cf;
+	my ($g, $gf) = tempfile('cvs.XXXXXX', SUFFIX => '.gitignore',
+		    TMPDIR => 1, UNLINK => 1);
+
+	if ($root) {
+		local $\ = "\n";
+		print $g "# CVS's default ignore list:";
+		print $g $_ for @cvsignore;
+	}
+
+	if (defined $cf)
+	{
+		open my $c, '<', $cf or return;
+		print $g "# converted from .cvsignore:\n";
+		while (<$c>) {
+			s-^\s+--;
+			s-\s*?\Z--;
+			s-\s+-\n-g;
+			s-^-/-gm;
+			s-^/!$-!/*-gm;
+			print $g $_;
+		}
+	}
+
+	close $g;
+	return $gf;
+}
+
+my @empty_new;
+if ($opt_g)
+{
+	my $gf = gitignore;
+	my $gh = hash_object($gf, ".gitignore");
+	unlink($gf);
+	push @empty_new, [0755, $gh, ".gitignore"];
 }
 
 my ($patchset,$date,$author_name,$author_email,$branch,@merge,$logmsg,$commit_id,$tag,$tagfunk,$tagfixup);
@@ -824,50 +902,52 @@ sub update_file($$$;$$) {
 	if ($dead) {
 		push(@old,$fn);
 		print "Delete $fn\n" if $opt_v;
-	} elsif (defined $ps && $ps > 0 && exists $commit_ids[$ps]) {
-		my $pid = open(my $F, '-|');
-		die $! unless defined $pid;
-		if (!$pid) {
-			exec("git", "ls-tree", $commit_ids[$ps], $fn)
-				or die "Cannot get object: $!\n";
-		}
-		local $_ = <$F>;
-		close $F;
-		unless (defined and $? == 0) {
-			print "Failed to get object for $ps:$fn; falling back to CVS\n";
-			return update_file($fn, $init, $rev, $dead);
-		}
-		chomp;
-		my ($mode, $type, $sha, $file) = split;
-		die "Object $ps:$fn $type, not blob" unless $type eq 'blob';
-		$mode = oct($mode) & 0777;
-		push(@new, [$mode, $sha, $fn]);
-	} else {
-		print "Fetching $fn   v $rev\n" if $opt_v;
-		my ($tmpname, $size) = $cvs->file($fn,$rev);
-		if ($size == -1) {
-			push(@old,$fn);
-			print "Drop $fn\n" if $opt_v;
-		} else {
-			print "".($init ? "New" : "Update")." $fn: $size bytes\n" if $opt_v;
-			my $pid = open(my $F, '-|');
-			die $! unless defined $pid;
-			if (!$pid) {
-			    exec("git", "hash-object", "-w", $tmpname)
-				or die "Cannot create object: $!\n";
-			}
-			my $sha = <$F>;
-			chomp $sha;
-			close $F;
-			my $mode = pmode($cvs->{'mode'});
-			push(@new,[$mode, $sha, $fn]); # may be resurrected!
-		}
-		unlink($tmpname);
+		unshift(@old,$fn) if $opt_g and $fn =~ s/$opt_g/.gitignore/;
+		return;
 	}
+	if (defined $ps && $ps > 0 && exists $commit_ids[$ps]) {
+		my ($sha, $mode, $type) = lookup_tree($commit_ids[$ps], $fn);
+		if (defined $sha) {
+			die "Object $ps:$fn $type, not blob" unless $type eq 'blob';
+			push(@new, [$mode, $sha, $fn]);
+			if ($opt_g and $fn =~ s/$opt_g/.gitignore/) {
+				my ($sha, $mode, $type) = lookup_tree($commit_ids[$ps], $fn);
+				unshift @new, [$mode, $sha, $fn] if defined $sha and $type eq 'blob';
+			}
+			pop @commit_revisions;
+			return;
+		}
+		print "Failed to get object for $ps:$fn; falling back to CVS\n";
+	}
+
+	print "Fetching $fn   v $rev\n" if $opt_v;
+	my ($tmpname, $size) = $cvs->file($fn,$rev);
+	if ($size == -1) {
+		unlink($tmpname);
+		push(@old,$fn);
+		print "Drop $fn\n" if $opt_v;
+		unshift(@old,$fn) if $opt_g and $fn =~ s/$opt_g/.gitignore/;
+		return;
+	}
+
+	print "".($init ? "New" : "Update")." $fn: $size bytes\n" if $opt_v;
+	my $sha = hash_object($tmpname, $fn);
+	my $mode = pmode($cvs->{'mode'});
+	push @new,[$mode, $sha, $fn]; # may be resurrected!
+
+	if ($opt_g and $fn =~ s/$opt_g/.gitignore/) {
+		my $tmpgi = gitignore($tmpname, $fn !~ /\//);
+		my $sha = hash_object($tmpgi, $fn);
+		unlink($tmpgi);
+		unshift @new,[$mode, $sha, $fn];
+	}
+
+	unlink($tmpname);
 }
 
 sub commit($) {
 	my ($ref) = @_;
+	unshift @new, @empty_new unless $commit_id;
 	update_index(@old, @new);
 	@old = @new = ();
 	my $tree = write_tree();
@@ -1035,7 +1115,8 @@ while (<CVS>) {
 		$tag = symbol_name($1);
 		$tagfunk = $2;
 		$tagfixup = 0;
-		system('git' , 'tag', '-f', "$opt_t$tag", $commit_id) == 0
+		# system('git' , 'tag', '-f', "$opt_t$tag", $commit_id) == 0 # too noisy
+		system('git' , 'update-ref', "refs/tags/$opt_t$tag", $commit_id) == 0
 			or die "Cannot create tag $tag: $!\n";
 		print "Created tag '$tag' on '$branch'\n" if $opt_v;
 		$state = 6;
@@ -1047,7 +1128,6 @@ while (<CVS>) {
 			$logmsg = "CVSPS_FIXUP $tagfunk $tag\n\nThis commit was manufactured by git-cvsimport to account for inconsistencies in the placement of a tag by cvsps.  These changes selectively revert/apply changes from other commits.";
 			$author_name = "git-cvsimport";
 			$author_email = "cvsps";
-			@commit_revisions = ();
 			commit("refs/tags/$opt_t$tag");
 			read_tree($commit_id);
 		}
