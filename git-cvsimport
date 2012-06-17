@@ -843,7 +843,7 @@ sub symbol_name($) {
 }
 
 # default cvsignore list, with CVS/RCS-related thing removed
-my @cvsignore = (qw(core tags TAGS .make.state .nse_depinfo ,* .del-* *.a *.olb *.o *.obj *.so *.Z *~ *.old *.elc *.ln *.bak *.BAK *.orig *.rej *.exe _$* *$), '.#*',
+my @cvsignore = (qw(core tags TAGS .make.state .nse_depinfo .del-* *.a *.olb *.o *.obj *.so *.Z *~ *.old *.elc *.ln *.bak *.BAK *.orig *.rej *.exe _$* *$), ',*', '.#*',
 	# '#*', # this will be intepreted as a comment. fix?
 );
 

@@ -2169,7 +2169,7 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
     else if (greedy_unnamed_branches)
     {
 	Symbol *unsym;
-	list_for_each_entry (unsym, &unnamed_branches, link)
+	list_for_each_entry_safe (unsym, &unnamed_branches, link)
 	{
 	    /* determine if unsym conflicts with file */
 	    Tag *utag;
