@@ -1183,7 +1183,8 @@ static CvsFile * build_file_by_name(const char * fn)
 
 static void merge_symbols(Symbol *sym, Symbol *old)
 {
-    struct list_link *next;
+    Tag *tag;
+    PatchSet *ps;
 
     assert(!sym->name && !old->name);
     sym->flags |= old->flags;
@@ -1191,19 +1192,13 @@ static void merge_symbols(Symbol *sym, Symbol *old)
 	sym->depth = old->depth | (sym->depth & 1);
     else
 	sym->depth |= old->depth & 1;
-    for (next = old->tags.next; next != &old->tags; next = next->next) 
-    {
-	Tag *tag = list_entry(next, Tag, global_link);
+    list_for_each_entry (tag, &old->tags, global_link)
 	tag->sym = sym;
-    }
     list_splice(&old->tags, &sym->tags);
-    for (next = old->patch_sets.next; next != &old->patch_sets; next = next->next) 
-    {
-	PatchSet *ps = list_entry(next, PatchSet, link);
+    list_for_each_entry (ps, &old->patch_sets, link)
 	ps->branch = sym;
-    }
     list_splice(&old->patch_sets, &sym->patch_sets);
-    list_del_once(&old->link);
+    list_del_safe(&old->link);
 
     free(old);
 }
@@ -1278,8 +1273,8 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
     }
 
     patch_set_add_member(retval, rev);
-    list_add_once(&retval->branch->link, &branches);
-    list_add_once(&retval->link, &retval->branch->patch_sets);
+    list_add_safe(&retval->branch->link, &branches);
+    list_add_safe(&retval->link, &retval->branch->patch_sets);
 }
 
 static Revision *make_vendor_shadow(Revision *rev)
@@ -1493,7 +1488,8 @@ static void check_print_patch_set(PatchSet * ps)
 static void print_patch_set(PatchSet * ps)
 {
     char datestr[64];
-    struct list_link * next;
+    Revision *psm;
+    Symbol *sym;
     const char * funk = "";
 
     if (!strftime(datestr, sizeof(datestr), date_fmt, localtime(&ps->date)))
@@ -1512,9 +1508,8 @@ static void print_patch_set(PatchSet * ps)
     printf("Log:\n%s\n", ps->descr);
     printf("Members: \n");
 
-    for (next = ps->members.next; next != &ps->members; next = next->next)
+    list_for_each_entry (psm, &ps->members, ps_link)
     {
-	Revision * psm = list_entry(next, Revision, ps_link);
 	if (ps->funk_factor == FNK_SHOW_SOME && psm->bad_funk)
 	    funk = "(BEFORE START TAG)";
 	else if (ps->funk_factor == FNK_HIDE_SOME && !psm->bad_funk)
@@ -1530,16 +1525,14 @@ static void print_patch_set(PatchSet * ps)
 	       funk);
     }
 
-    for (next = ps->tags.next; next != &ps->tags; next = next->next)
+    list_for_each_entry (sym, &ps->tags, tag_link)
     {
-	Symbol *sym = list_entry (next, Symbol, tag_link);
 	printf("Tag: %s %s\n", sym->name, tag_flag_descr[ffs(sym->flags)]);
 	if (sym->flags & ~TAG_LATE)
 	{
-	    struct list_link *tagl;
-	    for (tagl = sym->tags.next; tagl != &sym->tags; tagl = tagl->next)
+	    Tag *tag;
+	    list_for_each_entry (tag, &sym->tags, global_link)
 	    {
-		Tag *tag = list_entry (tagl, Tag, global_link);
 		if (tag->flags & ~TAG_LATE)
 		    printf("\t%s:%s%s#%d\n", tag->rev->file->filename, tag->rev->rev, tag->rev->dead ? "(DEAD)" : "", tag->rev->ps->psid);
 	    }
@@ -1598,16 +1591,12 @@ static int compare_rev_strings(const char * cr1, const char * cr2)
 
 static int compare_patch_sets_by_members(const PatchSet * ps1, const PatchSet * ps2)
 {
-    struct list_link * i;
+    Revision *psm1, *psm2;
 
-    for (i = ps1->members.next; i != &ps1->members; i = i->next)
+    list_for_each_entry (psm1, &ps1->members, ps_link)
     {
-	Revision * psm1 = list_entry(i, Revision, ps_link);
-	struct list_link * j;
-
-	for (j = ps2->members.next; j != &ps2->members; j = j->next)
+	list_for_each_entry (psm2, &ps2->members, ps_link)
 	{
-	    Revision * psm2 = list_entry(j, Revision, ps_link);
 	    if (psm1->file == psm2->file) 
 	    {
 		int ret = compare_rev_strings(psm1->rev, psm2->rev);
@@ -1730,12 +1719,10 @@ static int is_revision_metadata(const char * buff)
 
 static int patch_set_member_regex(PatchSet * ps, regex_t * reg)
 {
-    struct list_link * next;
+    Revision *psm;
 
-    for (next = ps->members.next; next != &ps->members; next = next->next)
+    list_for_each_entry (psm, &ps->members, ps_link)
     {
-	Revision * psm = list_entry(next, Revision, ps_link);
-	
 	if (regexec(&restrict_file, psm->file->filename, 0, NULL, 0) == 0)
 	    return 1;
     }
@@ -1745,12 +1732,10 @@ static int patch_set_member_regex(PatchSet * ps, regex_t * reg)
 
 static int patch_set_affects_branch(PatchSet * ps, const char * branch)
 {
-    struct list_link * next;
+    Revision *psm;
 
-    for (next = ps->members.next; next != &ps->members; next = next->next)
+    list_for_each_entry (psm, &ps->members, ps_link)
     {
-	Revision * psm = list_entry(next, Revision, ps_link);
-
 	/*
 	 * slight hack. if -r is specified, and this patchset
 	 * is 'before' the tag, but is FNK_SHOW_SOME, only
@@ -1770,12 +1755,12 @@ static int patch_set_affects_branch(PatchSet * ps, const char * branch)
 
 static void do_cvs_diff(PatchSet * ps)
 {
-    struct list_link * next;
     const char * dtype;
     const char * dopts;
     const char * utype;
     char use_rep_path[PATH_MAX];
     char esc_use_rep_path[PATH_MAX];
+    Revision *psm;
 
     fflush(stdout);
     fflush(stderr);
@@ -1808,9 +1793,8 @@ static void do_cvs_diff(PatchSet * ps)
 	esc_use_rep_path[0] = 0;
     }
 
-    for (next = ps->members.next; next != &ps->members; next = next->next)
+    list_for_each_entry (psm, &ps->members, ps_link)
     {
-	Revision * psm = list_entry(next, Revision, ps_link);
 	char cmdbuff[PATH_MAX * 2+1];
 	char esc_file[PATH_MAX];
 	int ret, check_ret = 0;
@@ -1938,11 +1922,10 @@ static Revision * parse_revision(CvsFile * file, char * rev_str)
 
 static Tag *find_branch_tag(Revision *rev, int branch)
 {
-    struct list_link *next;
+    Tag *tag;
 
-    for (next = rev->tags.next; next != &rev->tags; next = next->next)
+    list_for_each_entry (tag, &rev->tags, rev_link)
     {
-	Tag *tag = list_entry(next, Tag, rev_link);
 	if (abs(tag->branch) == branch)
 	    return tag;
 	if (!tag->branch)
@@ -2145,7 +2128,6 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
     Revision * rev;
     Symbol * sym = NULL;
     Tag * tag = NULL;
-    struct list_link *next;
     int depth;
 
     /* get a permanent storage string */
@@ -2160,14 +2142,13 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
 	sym = (Symbol*)get_hash_object(global_symbols, tag_str);
     else if (greedy_unnamed_branches)
     {
-	for (next = unnamed_branches.next; next != &unnamed_branches; next = next->next)
+	Symbol *unsym;
+	list_for_each_entry (unsym, &unnamed_branches, link)
 	{
-	    Symbol *unsym = list_entry(next, Symbol, link);
 	    /* determine if unsym conflicts with file */
-	    struct list_link *tagl;
-	    for (tagl = unsym->tags.next; tagl != &unsym->tags; tagl = tagl->next)
+	    Tag *utag;
+	    list_for_each_entry (utag, &unsym->tags, global_link)
 	    {
-		Tag *utag = list_entry(tagl, Tag, global_link);
 		if (utag->rev->file == file)
 		{
 		    unsym = NULL;
@@ -2234,11 +2215,11 @@ static void cvs_file_add_symbol(CvsFile * file, const char * rev_str, const char
 static void resolve_global_symbols()
 {
     struct hash_entry * he_sym;
-    struct list_link * next;
     reset_hash_iterator(global_symbols);
     while ((he_sym = next_hash_entry(global_symbols)))
     {
 	Symbol * sym = (Symbol*)he_sym->he_obj;
+	Tag *tag;
 	PatchSet * ps = NULL;
 
 	debug(DEBUG_STATUS, "resolving global symbol %s", sym->name);
@@ -2249,9 +2230,8 @@ static void resolve_global_symbols()
 	 * patchset with the tag
 	 */
 
-	for (next = sym->tags.next; next != &sym->tags; next = next->next)
+	list_for_each_entry_safe (tag, &sym->tags, global_link)
 	{
-	    Tag * tag = list_entry(next, Tag, global_link);
 	    Revision * rev = tag->rev;
 
 	    if (!rev)
@@ -2259,12 +2239,10 @@ static void resolve_global_symbols()
 
 	    if (!rev->present)
 	    {
-		struct list_link *tmp = next->prev;
 		debug(DEBUG_APPERROR, "revision %s of file %s is tagged but not present",
 		      rev->rev, rev->file->filename);
 		/* FIXME: memleak */
-		list_del(next);
-		next = tmp;
+		list_del(&tag->global_link);
 		continue;
 	    }
 
@@ -2330,6 +2308,7 @@ static void resolve_global_symbols()
     while ((he_sym = next_hash_entry(global_symbols)))
     {
 	Symbol * sym = (Symbol*)he_sym->he_obj;
+	Tag *tag;
 
 	if (!sym->ps)
 	    continue;
@@ -2340,9 +2319,8 @@ static void resolve_global_symbols()
 	 * check which members are invalid.  determine
 	 * the funk factor etc.
 	 */
-	for (next = sym->tags.next; next != &sym->tags; next = next->next)
+	list_for_each_entry (tag, &sym->tags, global_link)
 	{
-	    Tag * tag = list_entry(next, Tag, global_link);
 	    Tag *branch;
 	    Revision * rev = tag->rev;
 	    int flag = 0;
@@ -2473,10 +2451,9 @@ static void patch_set_add_member(PatchSet * ps, Revision * psm)
     /* check if a member for the same file already exists, if so
      * put this PatchSet on the collisions list 
      */
-    struct list_link * next;
-    for (next = ps->members.next; next != &ps->members; next = next->next) 
+    Revision *m;
+    list_for_each_entry_safe (m, &ps->members, ps_link)
     {
-	Revision * m = list_entry(next, Revision, ps_link);
 	if (m->file == psm->file) {
 		int order = compare_rev_strings(psm->rev, m->rev);
 
@@ -2519,7 +2496,7 @@ static int check_tag_funk(Symbol *tag, Tag *branch, Revision * rev)
     while (rev)
     {
 	PatchSet * next_ps = rev->ps;
-	struct list_link * next;
+	Revision *psm;
 
 	if (next_ps->psid > tag->ps->psid)
 	    break;
@@ -2552,9 +2529,8 @@ static int check_tag_funk(Symbol *tag, Tag *branch, Revision * rev)
 	 * the members individually with 'bad_funk' ,if this tag is the
 	 * '-r' tag.  Then we can actually split the diff on this patchset
 	 */
-	for (next = next_ps->members.next; next != &next_ps->members; next = next->next)
+	list_for_each_entry (psm, &next_ps->members, ps_link)
 	{
-	    Revision * psm = list_entry(next, Revision, ps_link);
 	    if (revision_affects_symbol(psm, tag->name) > 0)
 	    {
 		retval ++;
@@ -2583,17 +2559,16 @@ static int check_tag_funk(Symbol *tag, Tag *branch, Revision * rev)
 /* get the next revision from this one following branch if possible */
 static Revision *rev_follow_symbol(Revision * rev, Tag *sym)
 {
-    struct list_link * next;
     char symrev[REV_STR_MAX];
+    Revision *next_rev;
 
     /* check for 'main line of inheritance' */
     if (rev->branch == sym)
 	return rev->next_rev;
 
     /* look down branches */
-    for (next = rev->branch_children.next; next != &rev->branch_children; next = next->next)
+    list_for_each_entry (next_rev, &rev->branch_children, branch_link)
     {
-	Revision * next_rev = list_entry(next, Revision, branch_link);
 	if (next_rev->branch == sym)
 	    return next_rev;
     }
@@ -2603,9 +2578,8 @@ static Revision *rev_follow_symbol(Revision * rev, Tag *sym)
 
     if (rev->next_rev && revision_affects_revision(rev->next_rev->rev, symrev))
 	return rev->next_rev;
-    for (next = rev->branch_children.next; next != &rev->branch_children; next = next->next)
+    list_for_each_entry (next_rev, &rev->branch_children, branch_link)
     {
-	Revision * next_rev = list_entry(next, Revision, branch_link);
 	if (revision_affects_revision(next_rev->rev, symrev))
 	    return next_rev;
     }
@@ -2629,26 +2603,25 @@ static void check_norc(int argc, char * argv[])
 
 static void handle_collisions()
 {
-    struct list_link *next;
-    for (next = collisions.next; next != &collisions; next = next->next) 
+    PatchSet *ps;
+    list_for_each_entry (ps, &collisions, collision_link)
     {
-	PatchSet * ps = list_entry(next, PatchSet, collision_link);
 	printf("PatchSet %d has collisions\n", ps->psid);
     }
 }
 
 static void walk_patch_sets(void (*action)(PatchSet *), list_head *list)
 {
-    struct list_link *next;
-    for (next = list->next; next != list; next = next->next)
-	action(list_entry(next, PatchSet, link));
+    PatchSet *ps;
+    list_for_each_entry (ps, list, link)
+	action(ps);
 }
 
 static void walk_all_patch_sets(void (*action)(PatchSet *))
 {
-    struct list_link * next;
-    for (next = branches.next; next != &branches; next = next->next)
-	walk_patch_sets(action, &((Symbol *)list_entry(next, Symbol, link))->patch_sets);
+    Symbol *branch;
+    list_for_each_entry (branch, &branches, link)
+	walk_patch_sets(action, &branch->patch_sets);
     walk_patch_sets(action, &all_patch_sets);
 }
 
@@ -2673,7 +2646,7 @@ static void name_unnamed_branches()
 
 static void sort_branch_patch_sets()
 {
-    struct list_link *next;
-    for (next = branches.next; next != &branches; next = next->next)
-	list_sort(&list_entry(next, Symbol, link)->patch_sets, compare_branch_patch_sets);
+    Symbol *branch;
+    list_for_each_entry (branch, &branches, link)
+	list_sort(&branch->patch_sets, compare_branch_patch_sets);
 }

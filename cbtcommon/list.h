@@ -67,7 +67,7 @@ static INLINE void list_add(list_node *li, list_head *head)
 /*
  * Insert a new entry after the specified head..
  */
-static INLINE unsigned list_add_once(list_node *li, list_head *head)
+static INLINE unsigned list_add_safe(list_node *li, list_head *head)
 {
 	if (li->next)
 		return 0;
@@ -103,7 +103,7 @@ static INLINE void list_del(list_node *entry)
 	entry->prev = entry->next = NULL;
 }
 
-static INLINE unsigned list_del_once(list_node *entry)
+static INLINE unsigned list_del_safe(list_node *entry)
 {
 	if (!entry->next)
 		return 0;
@@ -138,5 +138,25 @@ static INLINE void list_splice(list_head *list, list_head *head)
 
 #define list_entry(ptr, type, member) \
    ((type *)((char *)(ptr)-offsetof(type, member)))
+
+#define list_for_each(pos, head) \
+	for (pos = (head)->next; pos != (head); pos = pos->next)
+
+#define list_for_each_safe(pos, head) \
+	static struct list_link *_next_##pos; \
+	for (pos = (head)->next, _next_##pos = pos->next; pos != (head); \
+		pos = _next_##pos, _next_##pos = pos->next)
+
+#define list_for_each_entry(pos, head, member)				\
+	for (pos = list_entry((head)->next, typeof(*pos), member);	\
+	     &pos->member != (head); 	\
+	     pos = list_entry(pos->member.next, typeof(*pos), member))
+
+#define list_for_each_entry_safe(pos, head, member)			\
+	static struct list_link *_next_##pos; \
+	for (pos = list_entry((head)->next, typeof(*pos), member),	\
+		_next_##pos = pos->member.next;	\
+	     &pos->member != (head); 					\
+	     pos = list_entry(_next_##pos, typeof(*pos), member), _next_##pos = _next_##pos->next)
 
 #endif /* _COMMON_LIST_H */
