@@ -1396,15 +1396,15 @@ static void assign_pre_revision(Revision *rev, Revision *pre)
 
 static void check_print_patch_set(PatchSet * ps)
 {
-    if (ps->psid < 0)
+    if (ps->branch_add)
 	return;
-
-    /* the funk_factor overrides the restrict_tag_start and end */
-    if (ps->funk_factor == FNK_SHOW_SOME || ps->funk_factor == FNK_SHOW_ALL)
-	goto ok;
 
     if (ps->funk_factor == FNK_HIDE_ALL)
 	return;
+
+    /* the funk_factor overrides the restrict_tag_start and end */
+    if (ps->funk_factor != FNK_SHOW_SOME && ps->funk_factor != FNK_SHOW_ALL)
+    {
 
     if (ps->psid <= restrict_tag_ps_start)
     {
@@ -1417,7 +1417,8 @@ static void check_print_patch_set(PatchSet * ps)
     if (ps->psid > restrict_tag_ps_end)
 	return;
 
- ok:
+    }
+
     if (restrict_date_start > 0 &&
 	(ps->date < restrict_date_start ||
 	 (restrict_date_end > 0 && ps->date > restrict_date_end)))
