@@ -30,7 +30,7 @@ use IPC::Open2;
 $SIG{'PIPE'}="IGNORE";
 #$ENV{'TZ'}="UTC";
 
-our ($opt_h,$opt_o,$opt_v,$opt_k,$opt_u,$opt_d,$opt_p,$opt_C,$opt_z,$opt_i,$opt_P, $opt_s,$opt_m,@opt_M,$opt_A,$opt_S,$opt_L, $opt_a, $opt_r, $opt_R, $opt_t);
+our ($opt_h,$opt_o,$opt_v,$opt_u,$opt_d,$opt_p,$opt_C,$opt_z,$opt_i,$opt_P, $opt_s,$opt_m,@opt_M,$opt_A,$opt_S,$opt_L, $opt_a, $opt_r, $opt_R, $opt_t);
 my (%conv_author_name, %conv_author_email);
 
 sub usage(;$) {
@@ -39,7 +39,7 @@ sub usage(;$) {
 	print STDERR <<END;
 Usage: git cvsimport     # fetch/update GIT from CVS
        [-o branch-for-HEAD] [-h] [-v] [-d CVSROOT] [-A author-conv-file]
-       [-p opts-for-cvsps] [-P file] [-C GIT_repository] [-z fuzz] [-i] [-k]
+       [-p opts-for-cvsps] [-P file] [-C GIT_repository] [-z fuzz] [-i]
        [-u] [-s subst] [-a] [-m] [-M regex] [-S regex] [-L commitlimit]
        [-r remote] [-R] [-t tag-prefix] CVS_module]
 END
@@ -419,12 +419,13 @@ sub readline {
 sub _file {
 	# Request a file with a given revision.
 	# Trial and error says this is a good way to do it. :-/
-	my ($self,$fn,$rev) = @_;
-	$self->{'socketo'}->write("Argument -N\n") or return undef;
-	$self->{'socketo'}->write("Argument -P\n") or return undef;
-	# -kk: Linus' version doesn't use it - defaults to off
-	if ($opt_k) {
-	    $self->{'socketo'}->write("Argument -kk\n") or return undef;
+	my ($self,$fn,$rev,$bin) = @_;
+	$self->{'socketo'}->write("Global_option -q\n") or return undef;
+	if ($bin) {
+		$self->{'socketo'}->write("Argument -p\n") or return undef;
+		$self->{'socketo'}->write("Argument -kb\n") or return undef;
+	} else {
+		$self->{'socketo'}->write("Argument -kk\n") or return undef;
 	}
 	$self->{'socketo'}->write("Argument -r\n") or return undef;
 	$self->{'socketo'}->write("Argument $rev\n") or return undef;
@@ -432,7 +433,6 @@ sub _file {
 	$self->{'socketo'}->write("Argument $self->{'subdir'}/$fn\n") or return undef;
 	$self->{'socketo'}->write("Directory .\n") or return undef;
 	$self->{'socketo'}->write("$self->{'repo'}\n") or return undef;
-	# $self->{'socketo'}->write("Sticky T1.0\n") or return undef;
 	$self->{'socketo'}->write("co\n") or return undef;
 	$self->{'socketo'}->flush() or return undef;
 	$self->{'lines'} = 0;
@@ -471,6 +471,7 @@ sub _line {
 			$res += length($line);
 		} elsif ($line =~ /^M\b/) {
 			# output, do nothing
+			print "S: $line" if $opt_v;
 		} elsif ($line =~ /^Mbinary\b/) {
 			my $cnt;
 			die "EOF from server after 'Mbinary'" unless defined ($cnt = $self->readline());
@@ -484,7 +485,7 @@ sub _line {
 				# print STDERR "S: ok (".length($res).")\n";
 				return $res;
 			} elsif ($line =~ s/^E //) {
-				# print STDERR "S: $line\n";
+				print STDERR "S: $line\n";
 			} elsif ($line =~ /^(Remove-entry|Removed) /i) {
 				$line = $self->readline(); # filename
 				$line = $self->readline(); # OK
@@ -502,6 +503,7 @@ sub file {
 	my ($self,$fn,$rev) = @_;
 	my $res;
 
+	undef $self->{'mode'};
 	my ($fh, $name) = tempfile('gitcvs.XXXXXX',
 		    DIR => File::Spec->tmpdir(), UNLINK => 1);
 
@@ -515,6 +517,14 @@ sub file {
 	    $res = $self->_line($fh);
 	    die "Retry failed" unless defined $res;
 	}
+
+	if ($res == 0 && !defined $self->{'mode'})
+	{
+	    print STDERR "Didn't get file contents; retrying in binary pipe mode...\n";
+	    $self->_file($fn,$rev,1) and $res = $self->_line($fh);
+	    die "Pipe mode failed" unless defined $res;
+	}
+
 	close ($fh);
 
 	return ($name, $res);
@@ -581,6 +591,7 @@ my $cvs = CVSconn->new($opt_d, $cvs_tree);
 
 sub pmode($) {
 	my ($mode) = @_;
+	return 0644 unless defined $mode;
 	my $m = 0;
 	my $mm = 0;
 	my $um = 0;
@@ -654,23 +665,17 @@ my %index; # holds filenames of one index per branch
 unless (-d $git_dir) {
 	system(qw(git init));
 	die "Cannot init the GIT db at $git_tree: $?\n" if $?;
-	system(qw(git read-tree --empty));
-	die "Cannot init an empty tree: $?\n" if $?;
-
-	$last_branch = $opt_o;
 	$orig_branch = "";
 } else {
 	open(F, "-|", qw(git symbolic-ref HEAD)) or
 		die "Cannot run git symbolic-ref: $!\n";
-	$last_branch = <F>;
+	$orig_branch = <F>;
 	close(F);
-	unless ($last_branch) {
-		warn "Cannot read the last branch name: $! -- resetting\n";
-		$last_branch = "";
+	if (defined $orig_branch) {
+		chomp $orig_branch;
+	} else {
+		warn "Cannot read the current branch name\n";
 	}
-	$orig_branch = $last_branch;
-	chomp $last_branch;
-	$last_branch = basename($last_branch);
 	$tip_at_start = `git rev-parse --verify HEAD`;
 
 	# Get the last import timestamps
@@ -727,7 +732,7 @@ unless ($opt_P) {
 		unless (defined($opt_p) && $opt_p =~ m/--no-cvs-direct/) {
 			push @opt, '--cvs-direct';
 		}
-		exec("cvsps","--norc",@opt,"-B",'-D','%s','--root',$opt_d,$cvs_tree);
+		exec("cvsps","--norc",@opt,'-D','%s','--root',$opt_d,$cvs_tree);
 		die "Could not start cvsps: $!\n";
 	}
 	($cvspsfh, $cvspsfile) = tempfile('gitXXXXXX', SUFFIX => '.cvsps',
@@ -789,6 +794,12 @@ sub write_tree () {
 	return $tree;
 }
 
+sub read_tree ($) {
+	my ($ref) = @_;
+	system("git", "read-tree", $ref || "--empty") == 0
+		or die "Branch switch to $ref failed: $! $?\n";
+}
+
 sub symbol_name($) {
 	local $_ = shift;
 	return $opt_o if $_ eq "HEAD";
@@ -797,7 +808,7 @@ sub symbol_name($) {
 	$_
 }
 
-my ($patchset,$date,$author_name,$author_email,$branch,$logmsg,$commit_id,$tag,$tagfunk,$tagfixup);
+my ($patchset,$date,$author_name,$author_email,$branch,@merge,$logmsg,$commit_id,$tag,$tagfunk,$tagfixup);
 my (@old,@new,@skipped,%ignorebranch,@commit_revisions);
 my (@commit_ids);
 
@@ -860,11 +871,9 @@ sub commit($) {
 	update_index(@old, @new);
 	@old = @new = ();
 	my $tree = write_tree();
-	my $parent = get_headref($ref);
-	print "Parent ID " . ($parent ? $parent : "(empty)") . "\n" if $opt_v;
+	print "Parent ID " . ($commit_id ? $commit_id : "(empty)") . "\n" if $opt_v;
 
-	my @commit_args;
-	push @commit_args, ("-p", $parent) if $parent;
+	unshift @merge, $commit_id if $commit_id;
 
 	# loose detection of merges
 	# based on the commit msg
@@ -872,10 +881,10 @@ sub commit($) {
 		next unless $logmsg =~ $rx && $1;
 		my $mparent = symbol_name($1);
 		if (my $sha1 = get_headref("$remote/$mparent") // get_headref("refs/tags/$opt_t$mparent")) {
-			push @commit_args, '-p', $sha1;
+			push @merge, $sha1;
 			print "Merge parent branch: $mparent\n" if $opt_v;
 		} else {
-			print "Unknown merge parent: $mparent\n" if $opt_v;
+			print "Unknown merge parent: $mparent\n";
 		}
 	}
 
@@ -887,7 +896,8 @@ sub commit($) {
 	$ENV{GIT_COMMITTER_EMAIL} = $author_email;
 	$ENV{GIT_COMMITTER_DATE} = $commit_date;
 	my $pid = open2(my $commit_read, my $commit_write,
-		'git', 'commit-tree', $tree, @commit_args);
+		'git', 'commit-tree', $tree, map { ('-p', $_) } @merge);
+	@merge = ();
 
 	# compatibility with git2cvs
 	#substr($logmsg,32767) = "" if length($logmsg) > 32767;
@@ -912,7 +922,7 @@ sub commit($) {
 	waitpid($pid,0);
 	die "Error running git commit-tree: $?\n" if $?;
 
-	system('git' , 'update-ref', $ref, $cid) == 0
+	system('git' , 'update-ref', $ref, $cid, $commit_id ? $commit_id : ()) == 0
 		or die "Cannot write branch $ref for update: $!\n";
 
 	if ($revision_map) {
@@ -957,6 +967,8 @@ while (<CVS>) {
 		s/\s+$//;
 		$branch = symbol_name($_);
 		$state = 7;
+	} elsif ($state == 7 and /^Vendor Merge: (\d+)$/) {
+		push @merge, $commit_ids[$1] if exists $commit_ids[$1];
 	} elsif ($state == 7 and /^Log:$/) {
 		$logmsg = "";
 		$state = 8;
@@ -982,19 +994,22 @@ while (<CVS>) {
 			next;
 		}
 		if ($branch ne $last_branch) {
-			if (!get_headref("$remote/$branch")) {
-				system(qw(git update-ref -m cvsimport),
-					"$remote/$branch", "refs/tags/$opt_t$branch");
-				if($? != 0) {
-					print STDERR "Could not create branch $branch\n";
-					$ignorebranch{$branch} = 0;
-					$state=11;
-					next;
+			$commit_id = get_headref("$remote/$branch");
+			unless ($commit_id) {
+				my $start = get_headref("refs/tags/$opt_t$branch");
+				if ($start) {
+					$commit_id = $start;
+					# optional: cleanup branch start tags
+					system(qw(git update-ref -m cvsimport),
+						"$remote/$branch", $start, "") == 0
+						or die "Could not create branch $branch\n";
+					system(qw(git tag -d), "$opt_t$branch");
+				} else {
+					print STDERR "No start point for branch $branch; using empty tree\n" unless $branch eq $opt_o;
+					undef $commit_id;
 				}
-				system(qw(git tag -d), "$opt_t$branch");
 			}
-			system("git", "read-tree", "$remote/$branch") == 0
-				or die "Branch switch to $branch failed: $?\n";
+			read_tree($commit_id);
 			$last_branch = $branch;
 		}
 		$state = 9;
@@ -1034,7 +1049,7 @@ while (<CVS>) {
 			$author_email = "cvsps";
 			@commit_revisions = ();
 			commit("refs/tags/$opt_t$tag");
-			system("git", "read-tree", "$remote/$branch");
+			read_tree($commit_id);
 		}
 		$state = 5;
 		redo;
@@ -1067,7 +1082,7 @@ if (defined $orig_git_index) {
 }
 
 # Now switch back to the branch we were in before all of this happened
-if ($orig_branch) {
+if (defined $orig_branch) {
 	print "DONE.\n" if $opt_v;
 	if ($opt_i) {
 		exit 0;
@@ -1087,11 +1102,10 @@ if ($orig_branch) {
 } else {
 	$orig_branch = "master";
 	print "DONE; creating $orig_branch branch\n" if $opt_v;
-	system("git", "update-ref", "refs/heads/master", "$remote/$opt_o")
-		unless defined get_headref('refs/heads/master');
+	system("git", "update-ref", "refs/heads/master", "$remote/$opt_o", "");
 	system("git", "symbolic-ref", "$remote/HEAD", "$remote/$opt_o")
 		if ($opt_r && $opt_o ne 'HEAD');
-	system('git', 'update-ref', 'HEAD', "$orig_branch");
+	system('git', 'update-ref', 'HEAD', $orig_branch);
 	unless ($opt_i) {
 		system(qw(git checkout -f));
 		die "checkout failed: $?\n" if $?;

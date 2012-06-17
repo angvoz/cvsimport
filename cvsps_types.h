@@ -60,6 +60,10 @@ struct _Revision
      * A list of all Tag structures tagging this revision
      */
     list_head tags; /* Tag->rev_link */
+
+    /* if this is on a vendor branch at a point where it applies to the parent
+     * branch, we make a copy "shadow" revision on the main branch, too */
+    Revision *vendor_shadow;
 };
 
 struct _CvsFile
@@ -126,6 +130,8 @@ struct _PatchSet
     /* for putting onto a list */
     list_node link; /* Symbol.patch_sets, all_patch_sets */
     list_node collision_link; /* collisions */
+
+    PatchSet *vendor_shadowed; /* like Revision.vendor_shadow but pointing the other way */
 };
 
 struct _PatchSetRange

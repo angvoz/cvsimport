@@ -141,6 +141,7 @@ static Revision * cvs_file_add_revision(CvsFile *, const char *);
 static void cvs_file_add_symbol(CvsFile * file, const char * rev, const char * tag, int branch);
 static Tag *find_branch_tag(Revision *, int);
 static void assign_patch_set(Revision *, const char *, const char *);
+static Revision *make_vendor_shadow(Revision *);
 static void assign_pre_revision(Revision *, Revision * rev);
 static void patch_set_add_member(PatchSet * ps, Revision * psm);
 static void walk_all_patch_sets(void (*action)(PatchSet *));
@@ -448,6 +449,7 @@ static void load_from_cvs()
 		    }
 
 		    assign_patch_set(rev, logbuff, authbuff);
+		    rev->vendor_shadow = make_vendor_shadow(rev);
 		}
 
 		logbuff[0] = 0;
@@ -1280,6 +1282,41 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
     list_add_once(&retval->link, &retval->branch->patch_sets);
 }
 
+static Revision *make_vendor_shadow(Revision *rev)
+{
+    Revision *prev = rev->branch->rev, *srev;
+
+    if (rev->branch->branch >= 0)
+	return NULL;
+
+    /* 1.1.1.2, where 1.1.1.3 has been done, but not 1.1.1.1 */
+    if (prev->next_rev 
+	    && (!rev->next_rev || prev->next_rev != rev->next_rev->vendor_shadow) 
+	    && prev->next_rev->date <= rev->date)
+	return NULL;
+
+    srev = (Revision*)calloc(1, sizeof(*rev));
+    srev->rev = rev->rev;
+    srev->file = rev->file;
+    srev->branch = prev->branch;
+    srev->date = rev->date;
+    srev->dead = rev->dead;
+    INIT_LIST_HEAD(&srev->branch_children);
+    INIT_LIST_HEAD(&srev->tags);
+
+    srev->prev_rev = prev;
+    if ((srev->next_rev = prev->next_rev))
+	srev->next_rev->prev_rev = srev;
+    prev->next_rev = srev;
+
+    assign_patch_set(srev, rev->ps->descr, rev->ps->author);
+    if (srev->ps->vendor_shadowed)
+	assert(srev->ps->vendor_shadowed == rev->ps);
+    else
+	srev->ps->vendor_shadowed = rev->ps;
+    return srev;
+}
+
 static int get_branch_ext(char * buff, const char * rev, int * leaf)
 {
     char * p;
@@ -1341,6 +1378,9 @@ static void assign_pre_revision(Revision *rev, Revision *pre)
 	    /* normal branch start point */
 	    rev->prev_rev = prev;
 	    list_add(&rev->branch_link, &prev->branch_children);
+
+	    if (rev->vendor_shadow && !strcmp(prev->ps->descr, "Initial revision\n"))
+		prev->branch_add = 1;
 	}
 	else if (strcmp(rev->rev, "1.1"))
 	    debug(DEBUG_APPMSG1, "WARNING: Cannot find parents for revision %s:%s; assuming initial", rev->file->filename, rev->rev);
@@ -1467,6 +1507,8 @@ static void print_patch_set(PatchSet * ps)
     printf("Date: %s\n", datestr);
     printf("Author: %s\n", ps->author);
     printf("Branch: %s\n", ps->branch->name);
+    if (ps->vendor_shadowed)
+	printf("Vendor Merge: %d\n", ps->vendor_shadowed->psid);
     printf("Log:\n%s\n", ps->descr);
     printf("Members: \n");
 
@@ -1511,18 +1553,8 @@ static void print_patch_set(PatchSet * ps)
  */
 static void assign_patchset_id(PatchSet * ps)
 {
-    /*
-     * Ignore the 'BRANCH ADD' patchsets 
-     */
-    if (!ps->branch_add)
-    {
-	ps_counter++;
-	ps->psid = ps_counter;
-    }
-    else
-    {
-	ps->psid = -1;
-    }
+    ps_counter++;
+    ps->psid = ps_counter;
 }
 
 static int compare_rev_strings(const char * cr1, const char * cr2)
@@ -2236,6 +2268,11 @@ static void resolve_global_symbols()
 		continue;
 	    }
 
+	    /* the last check only works "half" the time; we really should do a second (third) pass */
+	    if (rev->vendor_shadow && rev->vendor_shadow->ps->psid < rev->ps->psid && 
+		    !(ps && ps->branch == rev->branch->sym))
+		rev = rev->vendor_shadow;
+
 	    if (!ps || rev->ps->psid > ps->psid)
 	    {
 		/* there are some branch_add cases for which we don't have to
@@ -2315,7 +2352,12 @@ static void resolve_global_symbols()
 		continue;
 
 	    if (!tag->dead_init && !patch_set_affects_patch_set(rev->ps, sym->ps))
-		flag |= TAG_SPLIT;
+	    {
+		if (rev->vendor_shadow && patch_set_affects_patch_set(rev->vendor_shadow->ps, sym->ps))
+		    rev = rev->vendor_shadow;
+		else
+		    flag |= TAG_SPLIT;
+	    }
 
 	    if (tag->branch) 
 	    {
