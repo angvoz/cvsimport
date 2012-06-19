@@ -478,7 +478,7 @@ sub _line {
 			my $cnt;
 			die "EOF from server after 'Mbinary'" unless defined ($cnt = $self->readline());
 			chomp $cnt;
-			die "Duh: Mbinary $cnt" if $cnt !~ /^\d+$/ or $cnt<1;
+			die "Duh: Mbinary $cnt" if $cnt !~ /^\d+$/;
 			$line="";
 			$res += $self->_fetchfile($fh, $cnt);
 		} else {
