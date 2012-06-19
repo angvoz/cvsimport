@@ -141,7 +141,6 @@ static Revision * cvs_file_add_revision(CvsFile *, const char *);
 static void cvs_file_add_symbol(CvsFile * file, const char * rev, const char * tag, int branch);
 static Tag *find_branch_tag(Revision *, int);
 static void assign_patch_set(Revision *, const char *, const char *);
-static Revision *make_vendor_shadow(Revision *);
 static void assign_pre_revision(Revision *, Revision * rev);
 static void patch_set_add_member(PatchSet * ps, Revision * psm);
 static void walk_all_patch_sets(void (*action)(PatchSet *));
@@ -173,7 +172,7 @@ static void resort_patch_sets();
 
 int main(int argc, char *argv[])
 {
-    debuglvl = DEBUG_APPERROR|DEBUG_SYSERROR|DEBUG_APPMSG1;
+    debuglvl = DEBUG_APPERROR|DEBUG_SYSERROR|DEBUG_APPMSG1|DEBUG_APPMSG2;
 
     /*
      * we want to parse the rc first, so command line can override it
@@ -452,7 +451,6 @@ static void load_from_cvs()
 		    }
 
 		    assign_patch_set(rev, logbuff, authbuff);
-		    rev->vendor_shadow = make_vendor_shadow(rev);
 		}
 
 		logbuff[0] = 0;
@@ -486,7 +484,7 @@ static void load_from_cvs()
 			{
 			    if (!find_branch_tag(rev, bid))
 			    {
-				debug(DEBUG_APPMSG1, "WARNING: unnamed branch %s:%s", file->filename, branch);
+				debug(DEBUG_APPMSG2, "WARNING: unnamed branch %s:%s", file->filename, branch);
 				cvs_file_add_symbol(file, rev->rev, NULL, bid);
 			    }
 			}
@@ -880,7 +878,7 @@ static int parse_args(int argc, char *argv[])
 
 	if (strcmp(argv[i], "-q") == 0)
 	{
-	    debuglvl &= ~DEBUG_APPMSG1;
+	    debuglvl &= ~(DEBUG_APPMSG1|DEBUG_APPMSG2);
 	    i++;
 	    continue;
 	}
@@ -1280,39 +1278,53 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
     list_add_tail_safe(&retval->link, &retval->branch->patch_sets);
 }
 
-static Revision *make_vendor_shadow(Revision *rev)
+static Revision *make_vendor_shadow(Revision *rev, Tag *branch)
 {
-    Revision *prev = rev->branch->rev, *srev;
-
-    if (rev->branch->branch >= 0)
-	return NULL;
-
-    /* 1.1.1.2, where 1.1.1.3 has been done, but not 1.1.1.1 */
-    if (prev->next_rev 
-	    && (!rev->next_rev || prev->next_rev != rev->next_rev->vendor_shadow) 
-	    && prev->next_rev->date <= rev->date)
-	return NULL;
+    Revision *srev;
 
     srev = (Revision*)calloc(1, sizeof(*rev));
     srev->rev = rev->rev;
     srev->file = rev->file;
-    srev->branch = prev->branch;
+    srev->branch = branch;
     srev->date = rev->date;
     srev->dead = rev->dead;
+    srev->shadow = 1;
     INIT_LIST_HEAD(&srev->branch_children);
     INIT_LIST_HEAD(&srev->tags);
 
-    srev->prev_rev = prev;
-    if ((srev->next_rev = prev->next_rev))
-	srev->next_rev->prev_rev = srev;
-    prev->next_rev = srev;
+    rev->vendor_shadow = srev;
 
     assign_patch_set(srev, rev->ps->descr, rev->ps->author);
     if (srev->ps->vendor_shadowed)
-	assert(srev->ps->vendor_shadowed == rev->ps);
+	assert(srev->ps->vendor_shadowed == rev->ps); /* this may fail due to insufficient fuzz */
     else
 	srev->ps->vendor_shadowed = rev->ps;
+
     return srev;
+}
+
+static void make_vendor_shadows(Revision *rev, Revision *prev)
+{
+    time_t cut;
+    Tag *branch = prev->branch; /* presumably HEAD */
+
+    if (rev->vendor_shadow)
+	return;
+
+    if (prev->date < rev->date || strcmp(prev->ps->descr, "Initial revision\n"))
+	return;
+
+    prev->import_add = 1;
+    cut = prev->next_rev ? prev->next_rev->date : time(&cut);
+    do {
+	Revision *srev = make_vendor_shadow(rev, branch);
+	srev->next_rev = prev->next_rev;
+	srev->prev_rev = prev;
+	prev->next_rev = srev;
+	prev = srev;
+    } while ((rev = rev->next_rev) && rev->date < cut);
+    if (prev->next_rev)
+	prev->next_rev->prev_rev = prev;
 }
 
 static int get_branch_ext(char * buff, const char * rev, int * leaf)
@@ -1377,8 +1389,8 @@ static void assign_pre_revision(Revision *rev, Revision *pre)
 	    rev->prev_rev = prev;
 	    list_add_tail(&rev->branch_link, &prev->branch_children);
 
-	    if (rev->vendor_shadow && !strcmp(prev->ps->descr, "Initial revision\n"))
-		prev->branch_add = 1;
+	    if (rev->branch->branch < 0)
+		make_vendor_shadows(rev, prev);
 	}
 	else if (strcmp(rev->rev, "1.1"))
 	    debug(DEBUG_APPMSG1, "WARNING: Cannot find parents for revision %s:%s; assuming initial", rev->file->filename, rev->rev);
@@ -2282,7 +2294,7 @@ static void resolve_global_symbols()
 		/* there are some branch_add cases for which we don't have to
 		 * push it forward to the initial revision (and in some cases
 		 * must not) */
-		if (rev->branch_add)
+		if (rev->branch_add || tag->branch < 0)
 		    tag->dead_init = 1;
 		else if (tag->branch)
 		{
@@ -2385,7 +2397,7 @@ static void resolve_global_symbols()
 	    if (tag->dead_init)
 		while (next_rev && next_rev->prev_rev && !next_rev->prev_rev->dead)
 		    next_rev = next_rev->prev_rev;
-	    if (next_rev && next_rev->branch_add)
+	    if (next_rev && (next_rev->branch_add || (rev->import_add && next_rev->shadow)))
 		next_rev = rev_follow_symbol(next_rev, branch);
 	    if (next_rev && patch_set_affects_patch_set(next_rev->ps, sym->ps))
 	    {
@@ -2395,11 +2407,14 @@ static void resolve_global_symbols()
 		    flag |= TAG_FUNKY;
 	    }
 	    if (flag)
-		debug(DEBUG_STATUS, "file %s revision %s tag %s: TAG VIOLATION %s",
-		      rev->file->filename, rev->rev, sym->name, tag_flag_descr[ffs(flag)]);
+		debug(DEBUG_STATUS, "file %s revision %s tag %s: TAG VIOLATION %x %s",
+		      rev->file->filename, rev->rev, sym->name, flag, tag_flag_descr[ffs(flag)]);
 	    sym->flags |= flag;
 	    tag->flags = flag;
 	}
+	if (sym->flags)
+	    debug(DEBUG_APPMSG2, "tag %s: violation %x %s",
+		  sym->name, sym->flags, tag_flag_descr[ffs(sym->flags)]);
     }
 }
 

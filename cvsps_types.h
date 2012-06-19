@@ -29,6 +29,7 @@ struct _Revision
     time_t date;
     unsigned dead : 1;
     unsigned branch_add : 1;
+    unsigned import_add : 1;
     /*
      * In the cvs cvs repository (ccvs project) there are tagged
      * revisions that don't exist. track 'confirmed' revisions
@@ -39,6 +40,7 @@ struct _Revision
      * bad_funk is only set w.r.t the -r tags
      */
     unsigned bad_funk : 1;
+    unsigned shadow : 1;
 
     PatchSet * ps;
     list_node ps_link; /* PatchSet.members */
