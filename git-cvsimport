@@ -522,7 +522,7 @@ sub file {
 
 	if ($res == 0 && !defined $self->{'mode'})
 	{
-	    print STDERR "Didn't get file contents; retrying in binary pipe mode...\n";
+	    print STDERR "Didn't get contents of $fn:$rev; retrying in binary pipe mode...\n";
 	    $self->_file($fn,$rev,1) and $res = $self->_line($fh);
 	    die "Pipe mode failed" unless defined $res;
 	}
