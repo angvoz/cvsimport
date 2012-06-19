@@ -68,9 +68,21 @@ struct _Revision
     Revision *vendor_shadow;
 };
 
+struct _Tag
+{
+    Symbol * sym;
+    Revision * rev;
+    short branch; /* vendor branches are negative */
+    unsigned flags : 4;
+    unsigned dead_init : 1; /* tag points (or should point) to before file existed */
+    list_node global_link; /* Symbol.tags */
+    list_node rev_link; /* Revision.tags */
+};
+
 struct _CvsFile
 {
     char *filename;
+    Tag head_tag;
     struct hash_table * revisions;    /* rev_str to revision [Revision*] */
     struct hash_table * symbols;      /* tag to revision [Tag*]     */
     /* 
@@ -154,17 +166,6 @@ struct _Symbol
     /* branches (with patches) only: */
     list_node link; /* branches */
     list_head patch_sets; /* PatchSet->link */
-};
-
-struct _Tag
-{
-    Symbol * sym;
-    Revision * rev;
-    short branch; /* vendor branches are negative */
-    unsigned flags : 4;
-    unsigned dead_init : 1; /* tag points (or should point) to before file existed */
-    list_node global_link; /* Symbol.tags */
-    list_node rev_link; /* Revision.tags */
 };
 
 #endif /* CVSPS_TYPES_H */

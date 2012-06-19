@@ -78,10 +78,6 @@ static Symbol head_sym = { "HEAD",
     .tags = { &head_sym.tags, &head_sym.tags },
     .patch_sets = { &head_sym.patch_sets, &head_sym.patch_sets }
 };
-static const Tag head_tag = { (/*unconst*/ Symbol *)&head_sym,
-    .branch = 1,
-    .dead_init = 1
-};
 
 /* static globals */
 static int ps_counter;
@@ -2033,7 +2029,7 @@ static Revision * cvs_file_add_revision(CvsFile * file, const char * rev_str)
 	}
 	else
 	{
-	    rev->branch = (/*unconst*/ Tag *)&head_tag;
+	    rev->branch = &rev->file->head_tag;
 	}
 	
 	debug(DEBUG_STATUS, "revision %s of file %s on branch %s", rev->rev, rev->file->filename, rev->branch->sym->name ?: "(unnamed)");
@@ -2062,8 +2058,10 @@ static CvsFile * create_cvsfile()
 	return NULL;
     }
 
-    /* for convenience */
-    put_hash_object_ex(f->symbols, head_sym.name, (void *)&head_tag, HT_NO_KEYCOPY, NULL, NULL);
+    f->head_tag.sym = &head_sym;
+    f->head_tag.branch = 1;
+    list_add(&f->head_tag.global_link, &head_sym.tags);
+    put_hash_object_ex(f->symbols, head_sym.name, (void *)&f->head_tag, HT_NO_KEYCOPY, NULL, NULL);
    
     return f;
 }
