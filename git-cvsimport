@@ -678,7 +678,7 @@ unless (-d $git_dir) {
 	} else {
 		warn "Cannot read the current branch name\n";
 	}
-	$tip_at_start = `git rev-parse --verify HEAD`;
+	$tip_at_start = `git rev-parse --verify HEAD` unless $opt_i;
 
 	# Get the last import timestamps
 	my $fmt = '($ref, $author) = (%(refname), %(author));';
@@ -1013,7 +1013,7 @@ sub commit($) {
 	$cid
 };
 
-my $commitcount = 1;
+my $commitcount = 0;
 while (<CVS>) {
 	my $chomped = chomp;
 	if ($state == 0 and /^-+$/) {
@@ -1022,6 +1022,9 @@ while (<CVS>) {
 		$state = 1;
 		redo;
 	} elsif (($state==0 or $state==1) and s/^PatchSet\s+//) {
+		if ($opt_L && $commitcount > $opt_L) {
+			last;
+		}
 		$patchset = 0+$_;
 		$state=2;
 	} elsif ($state == 2 and s/^Date:\s+//) {
@@ -1101,9 +1104,6 @@ while (<CVS>) {
 		update_file($1, $2 eq "INITIAL", $3, $4);
 	} elsif ($state == 9) {
 		$commitcount++;
-		if ($opt_L && $commitcount > $opt_L) {
-			last;
-		}
 		$commit_ids[$patchset] = $commit_id = commit("$remote/$branch");
 		if (($commitcount & 1023) == 0) {
 			system(qw(git repack));
@@ -1141,7 +1141,12 @@ while (<CVS>) {
 		print STDERR "* UNKNOWN LINE * $_\n";
 	}
 }
-commit("$remote/$branch") if $branch and $state == 9;
+if ($branch and $state == 9) {
+	$commitcount++;
+	commit("$remote/$branch") 
+}
+
+print "Imported $commitcount patchsets.";
 
 unless ($opt_P) {
 	unlink($cvspsfile);
