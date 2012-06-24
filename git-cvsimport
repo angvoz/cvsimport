@@ -1146,7 +1146,7 @@ if ($branch and $state == 9) {
 	commit("$remote/$branch") 
 }
 
-print "Imported $commitcount patchsets.";
+print "Imported $commitcount patchsets.\n";
 
 unless ($opt_P) {
 	unlink($cvspsfile);
