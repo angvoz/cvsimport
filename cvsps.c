@@ -2666,7 +2666,7 @@ static void walk_all_patch_sets(void (*action)(PatchSet *))
 static void name_unnamed_branches()
 {
     unsigned id = 1;
-    char name[32] = ".CVSPS_UNNAMED_BRANCH_";
+    char name[32] = "$CVSPS_UNNAMED_BRANCH_";
     unsigned namelen = strlen(name);
 
     while (!list_empty(&unnamed_branches))
