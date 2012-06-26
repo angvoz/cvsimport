@@ -258,6 +258,7 @@ static void load_from_cvs()
     char buff[BUFSIZ];
     int state = NEED_RCS_FILE;
     CvsFile * file = NULL;
+    int revision_count = -1;
     Revision * rev = NULL;
     char authbuff[AUTH_STR_MAX];
     int logbufflen = LOG_STR_MAX + 1;
@@ -353,7 +354,17 @@ static void load_from_cvs()
 		parse_sym(file, buff);
 	    break;
 	case NEED_START_LOG:
-	    if (strcmp(buff, CVS_LOG_BOUNDARY) == 0)
+	    if (strncmp(buff, "total revisions: ", 17) == 0)
+	    {
+		char *p = strstr(buff+17, "selected revisions: ");
+		if (p)
+		{
+		    unsigned long sr = strtoul(p+20, &p, 10);
+		    if (sr && *p == '\n')
+			revision_count = sr;
+		}
+	    }
+	    else if (strcmp(buff, CVS_LOG_BOUNDARY) == 0)
 		state = NEED_REVISION;
 	    break;
 	case NEED_REVISION:
@@ -379,6 +390,8 @@ static void load_from_cvs()
 		 */
 		assign_pre_revision(prev_rev, rev);
 
+		if (!revision_count --)
+		    debug(DEBUG_APPMSG1, "WARNING: got more revisions than expected for %s", file->filename);
 		state = NEED_DATE_AUTHOR_STATE;
 	    }
 	    break;
@@ -422,7 +435,7 @@ static void load_from_cvs()
 	    break;
 	case NEED_EOM:
 	    if (strcmp(buff, CVS_LOG_BOUNDARY) == 0 ||
-		    strcmp(buff, CVS_FILE_BOUNDARY) == 0)
+		    (strcmp(buff, CVS_FILE_BOUNDARY) == 0 && revision_count <= 0))
 	    {
 		if (rev) 
 		{
@@ -460,6 +473,7 @@ static void load_from_cvs()
 			assign_pre_revision(rev, NULL);
 		    rev = NULL;
 		    file = NULL;
+		    revision_count = -1;
 		    state = NEED_RCS_FILE;
 		}
 	    }
