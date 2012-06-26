@@ -1058,9 +1058,18 @@ while (<CVS>) {
 	} elsif ($state == 8 and /^Members: $/) {
 		if (defined $branch_date{$branch} and $branch_date{$branch} >= $date) {
 			# skip
-			print "skip patchset $patchset: $date before $branch_date{$branch}\n" if $opt_v;
-			$state = 11;
-			next;
+			if ($branch_date{$branch} == $date)
+			{
+				# hopefully this is the same commit; perhaps should check
+				delete $branch_date{$branch};
+				$state = 5;
+			}
+			else
+			{
+				print "skip patchset $patchset: $date before $branch_date{$branch}\n" if $opt_v;
+				$state = 11;
+				next;
+			}
 		}
 		if (!$opt_a && $starttime - 300 - (defined $opt_z ? $opt_z : 300) <= $date) {
 			# skip if the commit is too recent
@@ -1095,7 +1104,7 @@ while (<CVS>) {
 			read_tree($commit_id);
 			$last_branch = $branch;
 		}
-		$state = 9;
+		$state = 9 if $state == 8;
 	} elsif ($state == 8) {
 		$logmsg .= $_;
 		$logmsg .= "\n" if $chomped;
@@ -1111,6 +1120,8 @@ while (<CVS>) {
 		$logmsg = "";
 		$state = 5;
 		redo;
+	} elsif ($state == 5 and /^\s+.+:/) {
+		# ignoring members...
 	} elsif ($state == 5 and /^Tag:\s+(\S+)(?:\s+\*\*(.*)\*\*)?\s*$/) {
 		$tag = symbol_name($1);
 		$tagfunk = $2;
