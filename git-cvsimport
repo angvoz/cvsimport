@@ -1061,7 +1061,6 @@ while (<CVS>) {
 			if ($branch_date{$branch} == $date)
 			{
 				# hopefully this is the same commit; perhaps should check
-				delete $branch_date{$branch};
 				$state = 5;
 			}
 			else
@@ -1070,6 +1069,9 @@ while (<CVS>) {
 				$state = 11;
 				next;
 			}
+		}
+		else {
+			delete $branch_date{$branch};
 		}
 		if (!$opt_a && $starttime - 300 - (defined $opt_z ? $opt_z : 300) <= $date) {
 			# skip if the commit is too recent
