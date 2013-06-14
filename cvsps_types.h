@@ -139,7 +139,7 @@ struct _PatchSet
      * PatchSets that come chronologically before the tag, but are logically
      * after, and vice-versa if a second -r option was specified
      */
-    enum funk_factor funk_factor : 4;
+    enum funk_factor funk_factor;// : 4;
 
     /* for putting onto a list */
     list_node link; /* Symbol.patch_sets, all_patch_sets */

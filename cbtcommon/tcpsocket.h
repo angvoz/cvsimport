@@ -22,7 +22,7 @@ int tcp_create_socket(int reuse_addr);
 int tcp_bind_and_listen(int sockfd, unsigned short tcpport);
 int tcp_accept_connection(int sockfd);
 unsigned int tcp_get_client_ip(int fd);
-int tcp_connect(int sockfd, const char *rem_addr, unsigned short port);
+int tcp_connect(int sockfd, const char *rem_address, unsigned short port);
 int convert_address(long *dest, const char *addr_str);
 int tcp_get_local_address(int sockfd, unsigned int *, unsigned short *);
 

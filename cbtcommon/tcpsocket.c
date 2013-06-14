@@ -150,7 +150,7 @@ tcp_get_client_ip(int fd)
 }
 
 int
-tcp_connect(int sockfd, const char *rem_addr, unsigned short port)
+tcp_connect(int sockfd, const char *rem_address, unsigned short port)
 {
   struct sockaddr_in addr;
   int addrlen;
@@ -160,7 +160,7 @@ tcp_connect(int sockfd, const char *rem_addr, unsigned short port)
   sockfd = win32_file_table[sockfd].win32id;
 #endif
 
-  if ( convert_address(&ipno , rem_addr) < 0 )
+  if ( convert_address(&ipno , rem_address) < 0 )
   {
     return -1;
   }

@@ -1,8 +1,11 @@
 MAJOR=2
-MINOR=1
-CC?=gcc
+MINOR=2d1
+CC?=xlC
 CFLAGS?=-g -O2 -Wall
 CPPFLAGS?=-I. -DVERSION=\"$(MAJOR).$(MINOR)\" -D_GNU_SOURCE=1
+#CFLAGS+= -I/opt/zlib/include/ -qlanglvl=stdc99 -qlanglvl=extc99 -qlanglvl=extended:newexcp:ucs:noanonunion:noanonstruct:noillptom:nooffsetnonpod:nooldfriend -qkeyword=typeof
+CFLAGS+= -I/opt/zlib/include/ -qlanglvl=stdc99 -qlanglvl=extc99 -qkeyword=typeof
+
 prefix?=/usr/local
 OBJS=\
 	cbtcommon/debug.o\

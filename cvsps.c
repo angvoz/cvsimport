@@ -1242,7 +1242,7 @@ static void assign_patch_set(Revision *rev, const char * log, const char * autho
     if (rev)
 	list_add_tail(&rev->ps_link, &retval->members);
 
-    find = (PatchSet**)tsearch(retval, &ps_tree, (comparison_fn_t)&compare_patch_sets);
+    find = (PatchSet**)tsearch(retval, &ps_tree, &compare_patch_sets);
 
     if (rev)
 	list_del(&rev->ps_link);
