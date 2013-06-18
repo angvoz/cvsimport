@@ -173,6 +173,12 @@ int main(int argc, char *argv[])
     if (strlen(norc) == 0 && parse_rc() < 0)
 	exit(1);
 
+    fprintf(stderr,"==> ");
+    int i;
+    for (i=0;i<argc;i++) {
+        fprintf(stderr,"%s ", argv[i]);
+    }
+    fprintf(stderr,"\n");
     if (parse_args(argc, argv) < 0)
 	exit(1);
 
@@ -1072,6 +1078,10 @@ static void init_paths()
     else 
 	p++;
 
+    // skip ":port" if present
+    if (*p != '/')
+        p = strchr(root_path, '/');
+
     /* some CVS have the CVSROOT string as part of the repository
      * string (initial substring).  remove it.
      */
@@ -1082,6 +1092,9 @@ static void init_paths()
 	int rlen = strlen(repository_path + len + 1);
 	memmove(repository_path, repository_path + len + 1, rlen + 1);
     }
+    /* chop optional trailing '/' */
+    if (repository_path[strlen(repository_path) - 1] == '/')
+        repository_path[strlen(repository_path) - 1] = 0;
 
     /* the 'strip_path' will be used whenever the CVS server gives us a
      * path to an 'rcs file'.  the strip_path portion of these paths is

@@ -973,7 +973,6 @@ while (<CVS>) {
 			next;
 		}
 		if (exists $ignorebranch{$branch}) {
-			print STDERR "Skipping $branch\n";
 			$state = 11;
 			next;
 		}
@@ -989,7 +988,7 @@ while (<CVS>) {
 			}
 			my $id = get_headref("$remote/$ancestor");
 			if (!$id) {
-				print STDERR "Branch $ancestor does not exist!\n";
+				print STDERR "Branch $branch stems from branch $ancestor that does not exist!\n";
 				$ignorebranch{$branch} = 1;
 				$state=11;
 				next;
