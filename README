@@ -1,3 +1,7 @@
+AG: A fork of dylex/cvsimport on github. Whatever I managed to get working on cygwin 1.7.20 with perl 5.14.
+I was looking for git-cvsimport that supports importing of multiple tags into one commit.
+
+
 CVSps (c) 2001,2002,2003 David Mansfield
 ------------------------------
 
